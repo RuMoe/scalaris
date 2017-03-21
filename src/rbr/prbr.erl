@@ -111,23 +111,25 @@
 -type entry() :: { any(), %% key
                    pr:pr(), %% r_read
                    pr:pr(), %% r_write
-                   any() %% value
+                   any(), %% value
+                   prbr:write_filter() %% last applied write filter
                  }.
 
 %% Messages to expect from this module
--spec msg_round_request_reply(comm:mypid(), boolean(), pr:pr(), pr:pr(), any(), atom()) -> ok.
-msg_round_request_reply(Client, Cons, ReadRound, WriteRound, Value, OpType) ->
-    comm:send(Client, {round_request_reply, Cons,  ReadRound, WriteRound, Value, OpType}).
+-spec msg_round_request_reply(comm:mypid(), boolean(), pr:pr(), pr:pr(),
+                              any(), atom(), prbr:write_filter()) -> ok.
+msg_round_request_reply(Client, Cons, ReadRound, WriteRound, Value, OpType, LastWF) ->
+    comm:send(Client, {round_request_reply, Cons,  ReadRound, WriteRound, Value, OpType, LastWF}).
 
--spec msg_read_reply(comm:mypid(), Consistency::boolean(),
-                     pr:pr(), any(), pr:pr())
+-spec msg_read_reply(comm:mypid(), Consistency::boolean(), pr:pr(), atom(),
+                     any(), pr:pr(), prbr:write_filter())
              -> ok.
-msg_read_reply(Client, Cons, YourRound, Val, LastWriteRound) ->
-    comm:send(Client, {read_reply, Cons, YourRound, Val, LastWriteRound}).
+msg_read_reply(Client, Cons, YourRound, Val, LastWriteRound, OpType, LastWF) ->
+    comm:send(Client, {read_reply, Cons, YourRound, Val, LastWriteRound, OpType, LastWF}).
 
--spec msg_read_deny(comm:mypid(), Consistency::boolean(), pr:pr(), pr:pr()) -> ok.
-msg_read_deny(Client, Cons, YourRound, LargerRound) ->
-    comm:send(Client, {read_deny, Cons, YourRound, LargerRound}).
+-spec msg_read_deny(comm:mypid(), Consistency::boolean(), pr:pr(), pr:pr(), atom()) -> ok.
+msg_read_deny(Client, Cons, YourRound, LargerRound, OpType) ->
+    comm:send(Client, {read_deny, Cons, YourRound, LargerRound, OpType}).
 
 -spec msg_write_reply(comm:mypid(), Consistency::boolean(),
                       any(), pr:pr(), pr:pr(), any()) -> ok.
@@ -191,8 +193,8 @@ on({prbr, round_request, _DB, Cons, Proposer, Key, DataType, ProposerUID, ReadFi
                                   val, NewKeyEntryVal,
                                   read_filter, ReadFilter}),
 
-    msg_round_request_reply(Proposer, Cons, AssignedReadRound,
-                            entry_r_write(KeyEntry), ReadVal, OpType),
+    msg_round_request_reply(Proposer, Cons, AssignedReadRound, entry_r_write(KeyEntry),
+                            ReadVal, OpType, entry_last_wf(KeyEntry)),
 
     _ = case OpType =:= read andalso not ValueHasChanged of
         true ->
@@ -211,7 +213,8 @@ on({prbr, round_request, _DB, Cons, Proposer, Key, DataType, ProposerUID, ReadFi
 
     TableName;
 
-on({prbr, read, _DB, Cons, Proposer, Key, DataType, ProposerUID, ReadFilter, ReadRound}, TableName) ->
+on({prbr, read, _DB, Cons, Proposer, Key, DataType, ProposerUID, ReadFilter,
+   ReadRound, OpType}, TableName) ->
     ?TRACE("prbr:read: ~p in round ~p~n", [Key, ReadRound]),
     KeyEntry = get_entry(Key, TableName),
 
@@ -234,14 +237,14 @@ on({prbr, read, _DB, Cons, Proposer, Key, DataType, ProposerUID, ReadFilter, Rea
             % round_request, and therefore a different ProposerUID.
             NewReadRound = pr:new(pr:get_r(ReadRound), ProposerUID),
 
-            msg_read_reply(Proposer, Cons, NewReadRound,
-                           ReadVal, EntryWriteRound),
+            msg_read_reply(Proposer, Cons, NewReadRound, ReadVal,
+                           EntryWriteRound, OpType, entry_last_wf(KeyEntry)),
 
             NewKeyEntry = entry_set_r_read(KeyEntry, NewReadRound),
             NewKeyEntry2 = entry_set_val(NewKeyEntry, NewKeyEntryVal),
             _ = set_entry(NewKeyEntry2, TableName);
          _ ->
-            msg_read_deny(Proposer, Cons, ReadRound, entry_r_read(KeyEntry))
+            msg_read_deny(Proposer, Cons, ReadRound, entry_r_read(KeyEntry), OpType)
     end,
     TableName;
 
@@ -289,7 +292,9 @@ on({prbr, write, DB, Cons, Proposer, Key, DataType, ProposerUID, InRound, OldWri
 
                 %% prepare for fast write 
                 NextWriteRound = next_read_round(TEntry, ProposerUID),
-                NewEntry = entry_set_r_read(TEntry, NextWriteRound),
+                T2Entry = entry_set_r_read(TEntry, NextWriteRound),
+
+                NewEntry = entry_set_last_wf(T2Entry, WriteFilter),
 
                 trace_mpath:log_info(self(), {'prbr:on(write)',
                                               round, NewWriteRound,
@@ -428,7 +433,8 @@ new(Key, Val) ->
      _R_Read = pr:new(0, '_'),
      %% Note: atoms < pids, so this is a good default.
      _R_Write = pr:new(0, '_'),
-     _Value = Val
+     _Value = Val,
+     fun prbr:noop_write_filter/3
      }.
 
 -spec entry_key(entry()) -> any().
@@ -447,6 +453,10 @@ entry_set_r_write(Entry, Round) -> setelement(3, Entry, Round).
 entry_val(Entry) -> element(4, Entry).
 -spec entry_set_val(entry(), any()) -> entry().
 entry_set_val(Entry, Value) -> setelement(4, Entry, Value).
+-spec entry_set_last_wf(entry(), prbr:write_filter()) -> entry().
+entry_set_last_wf(Entry, WriteFilter) -> setelement(5, Entry, WriteFilter).
+-spec entry_last_wf(entry()) -> prbr:write_filter().
+entry_last_wf(Entry) -> element(5, Entry).
 
 -spec next_read_round(entry(), any()) -> pr:pr().
 next_read_round(Entry, ProposerUID) ->
