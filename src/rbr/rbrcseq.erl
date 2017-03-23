@@ -1381,6 +1381,22 @@ add_write_deny(Replies, RoundTried, _Cons) ->
 
 -spec is_read_commuting(prbr:read_filter(), prbr:write_filter(), module()) -> boolean().
 is_read_commuting(ReadFilter, HighestWriteFilterSeen, Datatype) ->
+    %% A WF is considered commuting to a RF iff RF(v) =:= RF(WF(v)) for any v
+    %% To decide if a read can be can be deliverd when seeing inconsistent
+    %% write rounds, it is enough to check if the latest WF of the highest received
+    %% reply does commute with the RF of the current read.
+    %% Proof sketch:
+    %% (v_x, wf_x -> value/write_filter of reply with write round x)
+    %% Assume a set of replies with arbitrary write rounds. h* -> highest round recieved
+    %% Assume wf_h* commutes with current RF (therefore it is not a write through)
+    %% Assume knowing the previous write round in replica of h* -> let this round be c
+    %% - There once was a consistent write quorum in round c
+    %% - All replies with rounds smaller c can be ignored (a newer val was delivered)
+    %% - For every round h greater c but smaller h* it can be shown:
+    %%      - h was and will never be consistent quorum
+    %%      - the previous write round in its replica was also c
+    %%      - therefore wf_h(v_c) =:= v_h
+    %%      - no read with RF rf delivered v_h if rf(v_c) =/= rf(v_h)
     case erlang:function_exported(Datatype, get_commuting_wf_for_rf, 1) of
         true ->
             CommutingWF = Datatype:get_commuting_wf_for_rf(ReadFilter),
