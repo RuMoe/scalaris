@@ -63,7 +63,7 @@
                      highest_read_round :: pr:pr(),             %% highest read round received in replies
                      highest_write_count :: non_neg_integer(),  %% number of replies with current highest write round
                      highest_write_round :: pr:pr(),            %% highest write round recieved in replies
-                     last_write_filter :: prbr:write_filter(),
+                     highest_write_filter :: prbr:write_filter(),% WF used in last with the highest w round
                      read_value :: any()                        %% value returned from the round_request
                     }).
 
@@ -74,7 +74,7 @@
                     deny_count :: non_neg_integer(),            %% number of denies received
                     highest_write_count :: non_neg_integer(),   %% number of replies with current highest write round
                     highest_write_round :: pr:pr(),             %% highest write round received
-                    last_write_filter :: prbr:write_filter(),
+                    highest_write_filter :: prbr:write_filter(),%% WF used last in reply with the highest w round
                     read_value :: any()                         %% value returned frm read request
                    }).
 
@@ -1157,15 +1157,15 @@ add_rr_reply(Replies, _DBSelector, SeenReadRound, SeenWriteRound, Value,
         end,
 
     %% update write rounds and value
-    {NewHighestWriteRound, NewHighestWriteCount, NewLastWF, NewValue} =
+    {NewHighestWriteRound, NewHighestWriteCount, NewHighestWF, NewValue} =
         update_highest_write_round(Replies#rr_replies.highest_write_round,
                                    Replies#rr_replies.highest_write_count,
-                                   Replies#rr_replies.last_write_filter,
+                                   Replies#rr_replies.highest_write_filter,
                                    Replies#rr_replies.read_value,
                                    SeenWriteRound, SeenLastWF, Value, Datatype),
     R3 = R2#rr_replies{highest_write_round=NewHighestWriteRound,
                        highest_write_count=NewHighestWriteCount,
-                       last_write_filter=NewLastWF,
+                       highest_write_filter=NewHighestWF,
                        read_value=NewValue},
 
     ReadFilter =
@@ -1181,7 +1181,7 @@ add_rr_reply(Replies, _DBSelector, SeenReadRound, SeenWriteRound, Value,
             true ->
 
                 IsCommutingRead = OpType =:= read andalso
-                                      is_read_commuting(ReadFilter, NewLastWF, Datatype),
+                                      is_read_commuting(ReadFilter, NewHighestWF, Datatype),
 
                 if IsCommutingRead ->
                        {consistent, R3};
@@ -1234,15 +1234,15 @@ add_read_reply(Replies, _DBSelector, AssignedRound, Val, SeenWriteRound,
     NewAckCount = Replies#r_replies.ack_count + 1,
     R1 = Replies#r_replies{ack_count=NewAckCount},
 
-    {NewHighestWriteRound, NewHighestWriteCount, NewSeenLastWF, NewVal} =
+    {NewHighestWriteRound, NewHighestWriteCount, NewHighestWF, NewVal} =
         update_highest_write_round(R1#r_replies.highest_write_round,
                                    R1#r_replies.highest_write_count,
-                                   R1#r_replies.last_write_filter,
+                                   R1#r_replies.highest_write_filter,
                                    R1#r_replies.read_value,
                                    SeenWriteRound, SeenLastWF, Val, Datatype),
     R2 = R1#r_replies{highest_write_round=NewHighestWriteRound,
                       highest_write_count=NewHighestWriteCount,
-                      last_write_filter=NewSeenLastWF,
+                      highest_write_filter=NewHighestWF,
                       read_value=NewVal},
 
     ReadFilter =
@@ -1255,7 +1255,7 @@ add_read_reply(Replies, _DBSelector, AssignedRound, Val, SeenWriteRound,
         case ?REDUNDANCY:quorum_accepted(NewAckCount) of
             true ->
                 IsCommutingRead = OpType =:= read andalso
-                                      is_read_commuting(ReadFilter, NewSeenLastWF, Datatype),
+                                      is_read_commuting(ReadFilter, NewHighestWF, Datatype),
                 %% we have majority of acks
                 %% construct read value from replies
                 Collected = R2#r_replies.read_value,
@@ -1380,11 +1380,11 @@ add_write_deny(Replies, RoundTried, _Cons) ->
     {Done, R2}.
 
 -spec is_read_commuting(prbr:read_filter(), prbr:write_filter(), module()) -> boolean().
-is_read_commuting(ReadFilter, WriteFilter, Datatype) ->
-    case erlang:function_exported( Datatype, get_commuting_wf_for_rf, 1) of
+is_read_commuting(ReadFilter, HighestWriteFilterSeen, Datatype) ->
+    case erlang:function_exported(Datatype, get_commuting_wf_for_rf, 1) of
         true ->
             CommutingWF = Datatype:get_commuting_wf_for_rf(ReadFilter),
-            lists:member(WriteFilter, CommutingWF);
+            lists:member(HighestWriteFilterSeen, CommutingWF);
         false ->
             false
     end.
