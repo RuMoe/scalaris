@@ -68,7 +68,7 @@ read(Key) ->
     end.
 
 -spec write(client_key(), client_value()) -> {ok}.
-write(Key, _Value) ->
+write(Key, _Val) ->
     {RF, CC, WF} = get_write_op_addition(),
 
     rbrcseq:qwrite(kv_db, self(), ?RT:hash_key(Key), ?MODULE,
@@ -79,11 +79,11 @@ write(Key, _Value) ->
         ?SCALARIS_RECV({qwrite_deny, _ReqId, _NextFastWriteRound, _Value, Reason},
                        begin log:log("Write failed on key ~p: ~p~n", [Key, Reason]),
                        {ok} end) %% TODO: extend write_result type {fail, Reason} )
-    after 1000 ->
+    after 5000 ->
             log:log("~p write hangs at key ~p, ~p~n",
                     [self(), Key, erlang:process_info(self(), messages)]),
             receive
-                ?SCALARIS_RECV({qwrite_done, _ReqId, _NextFastWriteRound, Value, _WriteRet},
+                ?SCALARIS_RECV({qwrite_done, _ReqId, _NextFastWriteRound, _Value, _WriteRet},
                                begin
                                    log:log("~p write was only slow at key ~p~n",
                                            [self(), Key]),
