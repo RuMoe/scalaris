@@ -13,14 +13,13 @@
 %   limitations under the License.
 
 %% @author Jan Skrzypczak <skrzypczak@zib.de>
-%% @doc    Benchmark for master thesis
+%% @doc    Benchmarking interface called by basho-bench.
 %% @end
 %% @version $Id$
 -module(basho_bench_on_cseq).
 -author('skrzypczak@zib.de').
 -vsn('$Id:$ ').
 
-%-define(TRACE(X,Y), io:format(X,Y)).
 -define(TRACE(X,Y), ok).
 
 -include("scalaris.hrl").
@@ -31,33 +30,26 @@
 
 %% read filters
 -export([rf_val/1]).
--export([rf_none/1]).
+-export([rf_int/1]).
 
 %% content checks
 -export([cc_noop/3]).
--export([cc_noop_non_commute/3]).
 
 %% write filters
 -export([wf_add/3]).
 
--export([get_commuting_wf_for_rf/1]).
--export([get_cmd_class_by_filter/1]).
-
--type value()     :: non_neg_integer().
-
--define(KEY_MODE, {fixed, "123"}). % basho | {fixed, X}
--define(VALUE_MODE, {fixed, 1}). % bash | {fixed, X}
-
-
 %% %%%%%%%%%%%%%%%%%%%%%%
 %% API for basho bench
 %% %%%%%%%%%%%%%%%%%%%%%%
-read(K) ->
-    Key = map_to_key(K),
+-spec read(client_key()) -> {ok, any()} | {fail, not_found}.
+read(Key) ->
+    ReadOp = get_read_op_full_value(),
+
     rbrcseq:qread(kv_db, self(), ?RT:hash_key(Key), ?MODULE,
-                  get_benchmark_read_filter()),
+                  ReadOp),
     receive
         ?SCALARIS_RECV({qread_done, _ReqId, _NextFastWriteRound, _OldWriteRound, Value},
+
                        case Value of
                            no_value_yet -> {fail, not_found};
                            _ -> {ok, Value}
@@ -75,10 +67,10 @@ read(K) ->
        end
     end.
 
-write(K, V) ->
-    Key = map_to_key(K),
-    Value = map_to_value(V),
-    {RF, CC, WF} = get_benchmark_write_filter(),
+-spec write(client_key(), client_value()) -> {ok}.
+write(Key, Value) ->
+    {RF, CC, WF} = get_write_op_addition(),
+
     rbrcseq:qwrite(kv_db, self(), ?RT:hash_key(Key), ?MODULE,
                    RF, CC, WF, Value),
     trace_mpath:thread_yield(),
@@ -104,68 +96,36 @@ write(K, V) ->
                 end
     end.
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%%% Mapping to specific behaviour (too lazy to modify .sh scripts and recompile basho bensh driver)
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-map_to_key(Key) ->
-    case ?KEY_MODE of
-        basho -> Key;
-        {fixed, X} -> X
-    end.
+%% ------------------------------- READ OPERATIONS -----------------------------
+%% @doc Reads full value.
+-spec get_read_op_full_value() -> prbr:read_filter().
+get_read_op_full_value() -> fun ?MODULE:rf_val/1.
 
-map_to_value(Value) ->
-    case ?VALUE_MODE of
-        basho -> Value;
-        {fixed, X} -> X
-    end.
+%% ------------------------------ WRITE OPERATIONS -----------------------------
+%% @doc Addition.
+-spec get_write_op_addition() -> {prbr:write_filter(), any(), prbr:read_filter()}.
+get_write_op_addition() ->
+    {fun ?MODULE:rf_int/1, fun ?MODULE:cc_noop/3, fun ?MODULE:wf_add/3}.
 
-get_benchmark_read_filter() ->
-    fun ?MODULE:rf_val/1.
+%% ------------------------- FILTER -------------------------
 
-get_benchmark_write_filter_series(Rep) ->
-    % from 0% - 90% in 5 percent steps, afterwards in 1 percent steps
-    CommutePercentage = case Rep =< 19 of
-                                true -> 5 * (Rep - 1) / 100.0;
-                                false -> (90 + (Rep - 19)) / 100.0
-                        end,
-    case rand:uniform() > CommutePercentage of
-        true ->
-            {fun ?MODULE:rf_none/1, fun ?MODULE:cc_noop_non_commute/3, fun ?MODULE:wf_add/3};
-        false ->
-            {fun ?MODULE:rf_none/1, fun ?MODULE:cc_noop/3, fun ?MODULE:wf_add/3}
-    end.
+%% @doc Readfilter returning the complete value or no_value_yet if key does not exist.
+-spec rf_val(client_value() | prbr_bottom) -> client_value() | no_value_yet.
+rf_val(prbr_bottom) -> no_value_yet;
+rf_val(X)           -> X.
 
-get_benchmark_write_filter() ->
-    {fun ?MODULE:rf_none/1, fun ?MODULE:cc_noop/3, fun ?MODULE:wf_add/3}.
+%% @doc Readfilter returning the complete value or 0 if key does not exist.
+%% Assumens that value is a key
+-spec rf_int(integer() | prbr_bottom) -> integer().
+rf_int(prbr_bottom) -> 0;
+rf_int(X) when is_integer(X) -> X.
 
--spec rf_val(value() | prbr_bottom) -> client_value().
-rf_val(prbr_bottom) -> 0;
-rf_val(X)          -> X.
-rf_none(_Value) -> none.
-
+%% @doc Does nothing.
+-spec cc_noop(any(), any(), any()) -> {true, none}.
 cc_noop(_ReadVal, _WriteFilter, _Val) -> {true, none}.
-cc_noop_non_commute(_ReadVal, _WriteFilter, _Val) -> {true, none}.
 
-wf_add(prbr_bottom, none, ToAdd) -> {ToAdd, none};
-wf_add(Val, none, ToAdd) -> {Val + ToAdd, none}.
+%% @doc Writefilter that adds a value to an integer. Returns no value to client.
+-spec wf_add(integer() | prbr_bottom, any(), integer()) -> {integer(), none}.
+wf_add(prbr_bottom, _UI, ToAdd) -> {ToAdd, none};
+wf_add(Val, _UI, ToAdd) -> {Val + ToAdd, none}.
 
-%%%
-% commutiong op definitions
-%%%
-
--spec get_commuting_wf_for_rf(prbr:read_filter()) ->
-        [prbr:write_filter()].
-get_commuting_wf_for_rf(_RF) -> [].
-
--spec get_cmd_class_by_filter({prbr:read_filter(), any(),
-                               prbr:write_filter()}) -> cset:class().
-get_cmd_class_by_filter(Filter={_RF, _CC, _WF}) ->
-    AddCmd = {fun ?MODULE:rf_none/1,
-              fun ?MODULE:cc_noop/3,
-              fun ?MODULE:wf_add/3},
-    case Filter of
-        AddCmd ->
-            addition;
-        _ ->
-            cset:non_commuting_class()
-    end.
