@@ -68,11 +68,11 @@ read(Key) ->
     end.
 
 -spec write(client_key(), client_value()) -> {ok}.
-write(Key, Value) ->
+write(Key, _Value) ->
     {RF, CC, WF} = get_write_op_addition(),
 
     rbrcseq:qwrite(kv_db, self(), ?RT:hash_key(Key), ?MODULE,
-                   RF, CC, WF, Value),
+                   RF, CC, WF, 1),
     trace_mpath:thread_yield(),
     receive
         ?SCALARIS_RECV({qwrite_done, _ReqId, _NextFastWriteRound, _Value, _WriteRet}, {ok}); %%;

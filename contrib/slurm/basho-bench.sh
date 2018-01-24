@@ -68,6 +68,14 @@ trap 'trap_cleanup' SIGTERM SIGINT
 
 #=============================
 
+KIND='load'
+WORKERS_PER_LG_SERIES="2"
+VMS_PER_NODE=1
+LOAD_GENERATORS=1
+
+NODES=3
+
+
 main() {
     source $(pwd)/config/basho-bench.cfg
     check_wdir
@@ -477,15 +485,15 @@ write_config() {
 {operations, [{put,2}, {get, 8}]}.
 {driver, basho_bench_driver_scalaris}.
 {key_generator, {int_to_str, {uniform_int, $max_key}}}.
-%%{key_generator, {int_to_str, {uniform_int, 16#FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF}}}.
+
 %% size in Bytes
-{value_generator, {fixed_bin, $VALUE_SIZE}}.
+{value_generator, {fixed_bin, 1}}.
 {scalarisclient_mynode, ['benchclient${PARALLEL_ID}']}.
 {scalarisclient_cookie, 'chocolate chip cookie'}.
 
 %{remote_nodes, [{'buildbot2.zib.de', 'nodeB'}]}.
 %{distribute_work, true}.
-{report_interval, 5}.
+{report_interval, 1}.
 {log_level, info}.
 
 {scalarisclient_nodes, [$HOSTLIST]}.
