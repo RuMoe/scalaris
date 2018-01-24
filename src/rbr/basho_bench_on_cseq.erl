@@ -16,7 +16,7 @@
 %% @doc    Benchmark for master thesis
 %% @end
 %% @version $Id$
--module(bench_on_cseq).
+-module(basho_bench_on_cseq).
 -author('skrzypczak@zib.de').
 -vsn('$Id:$ ').
 
