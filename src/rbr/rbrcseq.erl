@@ -23,6 +23,7 @@
 %%-define(PDB, pdb_ets).
 -define(PDB, pdb).
 -define(REDUNDANCY, (config:read(redundancy_module))).
+-define(READ_RETRY_COUNT, (config:read(read_retry_without_increment))).
 
 %%-define(TRACE(X,Y), log:pal("~p" X,[self()|Y])).
 %%-define(TRACE(X,Y),
@@ -105,6 +106,7 @@
                   is_read | any(), %% value to write if entry belongs to write
                   read | write | denied_write, %% operation type
                   pr:pr(), %% my round
+                  any(), %% number of times a read might be retried
                   replies() %% maintains replies to check for consistent quorums
 %%% Attention: There is a case that checks the size of this tuple below!!
                  }.
@@ -325,6 +327,12 @@ on({request_cleanup, Client, EntryReg, Result}, State) ->
 
 %% qread step 1: request the current read/write rounds of + values from replicas.
 on({qround_request, Client, EntryReg, Key, DataType, ReadFilter, OpType, RetriggerAfter}, State) ->
+    comm:send_local(self(), {qround_request, Client, EntryReg, Key, DataType, ReadFilter,
+                           OpType, RetriggerAfter, ?READ_RETRY_COUNT, pr:new(0,0)}),
+    State;
+
+on({qround_request, Client, EntryReg, Key, DataType, ReadFilter, OpType, RetriggerAfter,
+   ReadRetries, LastObservedHighestRound}, State) ->
     ?TRACE("rbrcseq:read step 1: round_request, Client ~p~n", [Client]),
     %% assign new reqest-id; (also assign new ReqId when retriggering)
 
@@ -348,7 +356,8 @@ on({qround_request, Client, EntryReg, Key, DataType, ReadFilter, OpType, Retrigg
 
     %% create local state for the request
     Entry = entry_new_round_request(qround_request, ReqId, EntryReg, Key, DataType, Client,
-                                    period(State), ReadFilter, RetriggerAfter, OpType),
+                                    period(State), ReadFilter, RetriggerAfter, OpType,
+                                    {ReadRetries, LastObservedHighestRound}),
     _ = case save_entry(Entry, tablename(State)) of
             ok ->
                 [ begin
@@ -360,7 +369,7 @@ on({qround_request, Client, EntryReg, Key, DataType, ReadFilter, OpType, Retrigg
                   end
                 || X <- ?REDUNDANCY:get_keys(Key) ];
             error ->
-                %% cliend has already received an reply.
+                %% client has already received an reply.
                 ok
         end,
     %% retriggering of the request is done via the periodic dictionary scan
@@ -408,10 +417,31 @@ on({qround_request_collect,
                     delete_entry(NewEntry, tablename(State)),
                     State;
                 inconsistent ->
-                    %% majority replied, but we do not have a consistent quorum ->
-                    %% do a qread with highest received read round + 1
+                    %% majority replied, but we do not have a consistent quorum
                     delete_entry(NewEntry, tablename(State)),
-                    gen_component:post_op({qread,
+
+                    {RetriesRemaining, LastHighestRound} = entry_get_read_retry_info(NewEntry),
+                    %% TODO check if progess was made since last round
+                    RetryReadWithoutIncrement =
+                            entry_optype(NewEntry) =:= read andalso
+                            RetriesRemaining > 0,
+                    ct:pal("?? ~p", [RetryReadWithoutIncrement]),
+                    case RetryReadWithoutIncrement of
+                        true ->
+                            ct:pal("RETRIES LEFT ~p ", [RetriesRemaining]),
+                            get_component:post_op({qround_request,
+                                            entry_client(NewEntry),
+                                            entry_openreqentry(NewEntry),
+                                            entry_key(NewEntry),
+                                            entry_datatype(NewEntry),
+                                            entry_filters(NewEntry),
+                                            entry_optype(NewEntry),
+                                            entry_retrigger(NewEntry),
+                                            RetriesRemaining - 1,
+                                            LastHighestRound});
+                        false ->
+                            %% do a qread with highest received read round + 1
+                            gen_component:post_op({qread,
                                            entry_client(NewEntry),
                                            entry_openreqentry(NewEntry),
                                            entry_key(NewEntry),
@@ -419,7 +449,8 @@ on({qround_request_collect,
                                            entry_filters(NewEntry),
                                            entry_retrigger(NewEntry),
                                            1+pr:get_r(entry_my_round(NewEntry)),
-                                           entry_optype(NewEntry)}, State);
+                                           entry_optype(NewEntry)}, State)
+                    end;
                 write_through ->
                     %% majority replied, we have not a consistent quorum, but we can
                     %% skip qread phase and go directly to write through
@@ -797,7 +828,8 @@ on({qread_write_through_collect, ReqId,
                                  entry_filters(UnpackedEntry)}
                         end,
                     gen_component:post_op({qround_request, Client, entry_openreqentry(Entry),
-                      Key, entry_datatype(Entry), Filter, write, entry_retrigger(Entry) - entry_period(Entry)},
+                      Key, entry_datatype(Entry), Filter, write,
+                      entry_retrigger(Entry) - entry_period(Entry)},
                       State)
             end
     end;
@@ -867,7 +899,7 @@ on({qwrite, Client, OpenReqEntry, Key, DataType, Filters, WriteValue, RetriggerA
     case save_entry(Entry, tablename(State)) of
         ok ->
             gen_component:post_op({qround_request, This, OpenReqEntry, Key, DataType,
-                                 element(1, Filters), write, 1}, State);
+                                 element(1, Filters), write, _RetriggerAfter = 1}, State);
         error ->
             %% client has already received reply
             State
@@ -1119,7 +1151,7 @@ on({next_period, NewPeriod}, State) ->
     %% retriggering for them
     Table = tablename(State),
     _ = [ retrigger(X, Table, incdelay)
-          || X <- ?PDB:tab2list(Table), is_tuple(X), 13 =:= erlang:tuple_size(X),
+          || X <- ?PDB:tab2list(Table), is_tuple(X), 14 =:= erlang:tuple_size(X),
              0 =/= entry_retrigger(X), NewPeriod > entry_retrigger(X)],
 
     %% re-trigger next next_period
@@ -1148,7 +1180,7 @@ req_for_retrigger(Entry, IncDelay) ->
                          incdelay -> erlang:max(1, (entry_retrigger(Entry) - entry_period(Entry)) + 1);
                          noincdelay -> entry_retrigger(Entry)
                      end,
-    ?ASSERT(erlang:tuple_size(Entry) =:= 13),
+    ?ASSERT(erlang:tuple_size(Entry) =:= 14),
     Filters = entry_filters(Entry),
     if is_tuple(Filters) -> %% write request
            {qwrite, entry_client(Entry), entry_openreqentry(Entry),
@@ -1244,11 +1276,12 @@ create_open_entry_register(TableName) ->
 %% abstract data type to collect quorum read/write replies
 -spec entry_new_round_request(any(), any(), any(), ?RT:key(), module(),
                      comm:erl_local_pid(), non_neg_integer(), any(),
-                     non_neg_integer(), read | write)
+                     non_neg_integer(), read | write, any())
                     -> entry().
-entry_new_round_request(Debug, ReqId, EntryReg, Key, DataType, Client, Period, Filter, RetriggerAfter, OpType) ->
+entry_new_round_request(Debug, ReqId, EntryReg, Key, DataType, Client, Period, Filter, RetriggerAfter,
+                        OpType, ReadRetryInfo) ->
     {ReqId, EntryReg, Debug, Period, Period + RetriggerAfter + 20, Key, DataType, Client,
-     Filter, _ValueToWrite = is_read, OpType, _MyRound = pr:new(0,0), new_rr_replies()}.
+     Filter, _ValueToWrite = is_read, OpType, _MyRound = pr:new(0,0), ReadRetryInfo, new_rr_replies()}.
 
 -spec entry_new_read(any(), any(), any(), ?RT:key(), module(),
                      comm:erl_local_pid(), non_neg_integer(), any(),
@@ -1256,14 +1289,14 @@ entry_new_round_request(Debug, ReqId, EntryReg, Key, DataType, Client, Period, F
                     -> entry().
 entry_new_read(Debug, ReqId, EntryReg,  Key, DataType, Client, Period, Filter, RetriggerAfter, OpType) ->
     {ReqId, EntryReg, Debug, Period, Period + RetriggerAfter + 20, Key, DataType, Client,
-     Filter, _ValueToWrite = is_read, OpType, _MyRound = pr:new(0,0), new_read_replies()}.
+     Filter, _ValueToWrite = is_read, OpType, _MyRound = pr:new(0,0), 0, new_read_replies()}.
 
 -spec entry_new_write(any(), any(), any(), ?RT:key(), module(), comm:erl_local_pid(),
                       non_neg_integer(), tuple(), any(), non_neg_integer())
                      -> entry().
 entry_new_write(Debug, ReqId, EntryReg, Key, DataType, Client, Period, Filters, Value, RetriggerAfter) ->
     {ReqId, EntryReg, Debug, Period, Period + RetriggerAfter, Key, DataType, Client,
-     Filters, _ValueToWrite = Value, write, _MyRound = pr:new(0,0), new_write_replies()}.
+     Filters, _ValueToWrite = Value, write, _MyRound = pr:new(0,0), 0, new_write_replies()}.
 
 -spec new_rr_replies() -> #rr_replies{}.
 new_rr_replies() ->
@@ -1314,10 +1347,12 @@ entry_set_optype(Entry, OpType)   -> setelement(11, Entry, OpType).
 entry_my_round(Entry)             -> element(12, Entry).
 -spec entry_set_my_round(entry(), pr:pr()) -> entry().
 entry_set_my_round(Entry, Round)  -> setelement(12, Entry, Round).
+-spec entry_get_read_retry_info(entry()) -> any().
+entry_get_read_retry_info(Entry) -> element(13, Entry).
 -spec entry_replies(entry())      -> replies().
-entry_replies(Entry)              -> element(13, Entry).
+entry_replies(Entry)              -> element(14, Entry).
 -spec entry_set_replies(entry(), replies()) -> entry().
-entry_set_replies(Entry, Replies) -> setelement(13, Entry, Replies).
+entry_set_replies(Entry, Replies) -> setelement(14, Entry, Replies).
 
 -spec add_rr_reply(#rr_replies{}, dht_node_state:db_selector(),
                    pr:pr(), pr:pr(), client_value(), atom(), prbr:write_filter(),
