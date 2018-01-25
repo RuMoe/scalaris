@@ -69,11 +69,12 @@ trap 'trap_cleanup' SIGTERM SIGINT
 #=============================
 
 KIND='load'
-WORKERS_PER_LG_SERIES="2"
+DURATION=5
+WORKERS_PER_LG_SERIES="51"
 VMS_PER_NODE=1
 LOAD_GENERATORS=1
 
-NODES=3
+NODES=5
 
 
 main() {
@@ -482,9 +483,14 @@ write_config() {
 {mode, $MODE}.
 {duration, $DURATION}.
 {concurrent, $WORKERS_PER_LG}.
-{operations, [{put,2}, {get, 8}]}.
+%{operations, [{put,2}, {get, 8}]}.
+{operations,[
+        {1, [{put, 1}, {get, 0}]},
+        {1, [{put, 0}, {get, 1}]}
+    ]}.
+
 {driver, basho_bench_driver_scalaris}.
-{key_generator, {int_to_str, {uniform_int, $max_key}}}.
+{key_generator, {int_to_str, {function, basho_bench_fixed_keygen, fixed, [12345]}}}.
 
 %% size in Bytes
 {value_generator, {fixed_bin, 1}}.

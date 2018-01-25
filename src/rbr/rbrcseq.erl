@@ -327,9 +327,8 @@ on({request_cleanup, Client, EntryReg, Result}, State) ->
 
 %% qread step 1: request the current read/write rounds of + values from replicas.
 on({qround_request, Client, EntryReg, Key, DataType, ReadFilter, OpType, RetriggerAfter}, State) ->
-    comm:send_local(self(), {qround_request, Client, EntryReg, Key, DataType, ReadFilter,
-                           OpType, RetriggerAfter, ?READ_RETRY_COUNT, pr:new(0,0)}),
-    State;
+    gen_component:post_op({qround_request, Client, EntryReg, Key, DataType, ReadFilter,
+                           OpType, RetriggerAfter, ?READ_RETRY_COUNT, pr:new(0,0)}, State);
 
 on({qround_request, Client, EntryReg, Key, DataType, ReadFilter, OpType, RetriggerAfter,
    ReadRetries, LastObservedHighestRound}, State) ->
@@ -425,11 +424,9 @@ on({qround_request_collect,
                     RetryReadWithoutIncrement =
                             entry_optype(NewEntry) =:= read andalso
                             RetriesRemaining > 0,
-                    ct:pal("?? ~p", [RetryReadWithoutIncrement]),
                     case RetryReadWithoutIncrement of
                         true ->
-                            ct:pal("RETRIES LEFT ~p ", [RetriesRemaining]),
-                            get_component:post_op({qround_request,
+                            gen_component:post_op({qround_request,
                                             entry_client(NewEntry),
                                             entry_openreqentry(NewEntry),
                                             entry_key(NewEntry),
@@ -438,7 +435,7 @@ on({qround_request_collect,
                                             entry_optype(NewEntry),
                                             entry_retrigger(NewEntry),
                                             RetriesRemaining - 1,
-                                            LastHighestRound});
+                                            LastHighestRound}, State);
                         false ->
                             %% do a qread with highest received read round + 1
                             gen_component:post_op({qread,
@@ -1428,8 +1425,9 @@ add_rr_reply(Replies, _DBSelector, SeenReadRound, SeenWriteRound, Value,
                     %% a new read anyway. Therefore, we can safely skip qread here
                     %% and proceed directly to the WriteThrough to prevent doing the
                     %% same thing twice.
-                    not ConsWriteRounds andalso UsedPartialReadFilter ->
-                        {write_through, R3};
+      % TODO: TEMPORARILY DISABLED
+      %              not ConsWriteRounds andalso UsedPartialReadFilter ->
+      %                  {write_through, R3};
 
                     %% For everything else, the default is starting a qread which
                     %% might receive a consistent state
