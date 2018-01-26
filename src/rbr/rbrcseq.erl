@@ -425,10 +425,17 @@ on({qround_request_collect,
                     WriteState = NewReplies#rr_replies.write_state,
                     SeenHighestReadRound = WriteState#write_state.highest_read_round,
                     {RetriesRemaining, LastHighestRound} = entry_get_read_retry_info(NewEntry),
+
+                    NewRetries = case SeenHighestReadRound =< LastHighestRound of
+                                         true ->
+                                            RetriesRemaining - 1;
+                                         false ->
+                                            ?READ_RETRY_COUNT
+                                 end,
+                    NewHighestRound = max(LastHighestRound, SeenHighestReadRound),
                     RetryReadWithoutIncrement =
                             entry_optype(NewEntry) =:= read andalso
-                            SeenHighestReadRound > LastHighestRound andalso
-                            RetriesRemaining > 0,
+                            RetriesRemaining  > 0,
                     case RetryReadWithoutIncrement of
                         true ->
                             gen_component:post_op({qround_request,
@@ -439,8 +446,8 @@ on({qround_request_collect,
                                             entry_filters(NewEntry),
                                             entry_optype(NewEntry),
                                             entry_retrigger(NewEntry),
-                                            RetriesRemaining - 1,
-                                            SeenHighestReadRound}, State);
+                                            NewRetries,
+                                            NewHighestRound}, State);
                         false ->
                             %% do a qread with highest received read round + 1
                             gen_component:post_op({qread,
