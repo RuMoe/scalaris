@@ -441,8 +441,7 @@ on({qround_request_collect,
                                             entry_optype(NewEntry),
                                             entry_retrigger(NewEntry),
                                             RetriesRemaining - 1,
-                                            SeenHighestReadRound});
-                                            LastHighestRound}, State);
+                                            SeenHighestReadRound}, State);
                         false ->
                             %% do a qread with highest received read round + 1
                             gen_component:post_op({qread,
