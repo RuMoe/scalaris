@@ -55,9 +55,9 @@
 
 %% Aggregation of the distributed write state received in round_request
 %% or read replies.
--record(write_state, {% The highest write round received in replies
+-record(write_state, {
+                      % The highest write round received in replies
                       highest_write_round :: pr:pr(),
-                      highest_read_round :: non_neg_integer(), % only round number
                       % The number of replies seen with this round
                       highest_write_count :: non_neg_integer(),
                       % The write_filter used in this round
@@ -329,10 +329,10 @@ on({request_cleanup, Client, EntryReg, Result}, State) ->
 %% qread step 1: request the current read/write rounds of + values from replicas.
 on({qround_request, Client, EntryReg, Key, DataType, ReadFilter, OpType, RetriggerAfter}, State) ->
     gen_component:post_op({qround_request, Client, EntryReg, Key, DataType, ReadFilter,
-                           OpType, RetriggerAfter, ?READ_RETRY_COUNT, 0}, State);
+                           OpType, RetriggerAfter, ?READ_RETRY_COUNT, 0, 0}, State);
 
 on({qround_request, Client, EntryReg, Key, DataType, ReadFilter, OpType, RetriggerAfter,
-   ReadRetries, LastObservedHighestReadRoundNumber}, State) ->
+   ReadRetries, LastHighestReadRound,LastHighestWriteRound}, State) ->
     ?TRACE("rbrcseq:read step 1: round_request, Client ~p~n", [Client]),
     %% assign new reqest-id; (also assign new ReqId when retriggering)
 
@@ -357,7 +357,7 @@ on({qround_request, Client, EntryReg, Key, DataType, ReadFilter, OpType, Retrigg
     %% create local state for the request
     Entry = entry_new_round_request(qround_request, ReqId, EntryReg, Key, DataType, Client,
                                     period(State), ReadFilter, RetriggerAfter, OpType,
-                                    {ReadRetries, LastObservedHighestReadRoundNumber}),
+                                    {ReadRetries, LastHighestReadRound, LastHighestWriteRound}),
     _ = case save_entry(Entry, tablename(State)) of
             ok ->
                 [ begin
@@ -423,16 +423,20 @@ on({qround_request_collect,
                     %% check if read can be retried because we made progress since
                     %% last read
                     WriteState = NewReplies#rr_replies.write_state,
-                    SeenHighestReadRound = WriteState#write_state.highest_read_round,
-                    {RetriesRemaining, LastHighestRound} = entry_get_read_retry_info(NewEntry),
-
-                    NewRetries = case SeenHighestReadRound =< LastHighestRound of
+                    SeenHighestReadRound = pr:get_r(NewReplies#rr_replies.highest_read_round),
+                    SeenHighestWriteRound = pr:get_r(WriteState#write_state.highest_write_round),
+                    {RetriesRemaining, HighestReadRound, HighestWriteRound} =
+                        entry_get_read_retry_info(NewEntry),
+                    {NewRetries, NewHighestReadRound, NewHighestWriteRound} =
+                        case SeenHighestReadRound =< HighestReadRound andalso
+                             SeenHighestWriteRound =< HighestWriteRound of
                                          true ->
-                                            RetriesRemaining - 1;
+                                            {RetriesRemaining - 1, HighestReadRound,
+                                             HighestWriteRound};
                                          false ->
-                                            ?READ_RETRY_COUNT
+                                            {?READ_RETRY_COUNT, SeenHighestReadRound,
+                                             SeenHighestWriteRound}
                                  end,
-                    NewHighestRound = max(LastHighestRound, SeenHighestReadRound),
                     RetryReadWithoutIncrement =
                             entry_optype(NewEntry) =:= read andalso
                             RetriesRemaining  > 0,
@@ -447,7 +451,8 @@ on({qround_request_collect,
                                             entry_optype(NewEntry),
                                             entry_retrigger(NewEntry),
                                             NewRetries,
-                                            NewHighestRound}, State);
+                                            NewHighestReadRound,
+                                            NewHighestWriteRound}, State);
                         false ->
                             %% do a qread with highest received read round + 1
                             gen_component:post_op({qread,
@@ -1319,8 +1324,7 @@ new_read_replies() ->
 -spec new_write_state() -> #write_state{}.
 new_write_state() ->
     #write_state{highest_write_count = 0, highest_write_round = pr:new(0,0),
-                 highest_read_round = 0, highest_write_filter = none,
-                 value = new_empty_value}.
+                 highest_write_filter = none, value = new_empty_value}.
 
 -spec new_write_replies() -> #w_replies{}.
 new_write_replies() ->
@@ -1389,7 +1393,7 @@ add_rr_reply(Replies, _DBSelector, SeenReadRound, SeenWriteRound, Value,
         end,
 
     %% update write rounds and value
-    NewWriteState = update_write_state(Replies#rr_replies.write_state, SeenReadRound,
+    NewWriteState = update_write_state(Replies#rr_replies.write_state,
                                        SeenWriteRound, SeenLastWF, Value, Datatype),
     R3 = R2#rr_replies{write_state=NewWriteState},
 
@@ -1468,7 +1472,7 @@ add_read_reply(Replies, _DBSelector, AssignedRound, Val, SeenWriteRound,
     NewAckCount = Replies#r_replies.ack_count + 1,
     R1 = Replies#r_replies{ack_count=NewAckCount},
 
-    NewWriteState = update_write_state(Replies#r_replies.write_state, AssignedRound,
+    NewWriteState = update_write_state(Replies#r_replies.write_state,
                                        SeenWriteRound, SeenLastWF, Val, Datatype),
     R2 = R1#r_replies{write_state=NewWriteState},
 
@@ -1511,43 +1515,30 @@ add_read_reply(Replies, _DBSelector, AssignedRound, Val, SeenWriteRound,
     NewRound = erlang:max(CurrentRound, AssignedRound),
     {Result, R4, NewRound}.
 
--spec update_write_state(#write_state{}, pr:pr(), pr:pr(), prbr:write_filter(),
+-spec update_write_state(#write_state{}, pr:pr(), prbr:write_filter(),
                          any(), module()) -> #write_state{}.
-update_write_state(WriteState, SeenReadRound, SeenWriteRound, SeenLastWF, SeenValue, Datatype) ->
+update_write_state(WriteState, SeenWriteRound, SeenLastWF, SeenValue, Datatype) ->
     %% extract write through info for round comparisons since
     %% they can be key-dependent if something different than
     %% replication is used for redundancy
     CurrentWriteRoundNoWTI = pr:set_wti(WriteState#write_state.highest_write_round, none),
     SeenWriteRoundNoWTI = pr:set_wti(SeenWriteRound, none),
-    SeenReadRoundNumber = pr:get_r(SeenReadRound),
 
-    %% update the higherst seen read round independently from the rest of the
-    %% write state. this round is only needed to check if a read in the rr_phase
-    %% can retry since a write is in progress and its proposer not dead yet.
-    TWriteState = case SeenReadRoundNumber > WriteState#write_state.highest_read_round  of
-                      true ->
-                          WriteState#write_state{
-                            highest_read_round=SeenReadRoundNumber
-                           };
-                      false ->
-                          WriteState
-                  end,
-
-    CurrentValue = TWriteState#write_state.value,
+    CurrentValue = WriteState#write_state.value,
     if CurrentWriteRoundNoWTI =:= SeenWriteRoundNoWTI ->
-           TWriteState#write_state{
-              highest_write_count=TWriteState#write_state.highest_write_count+1,
+           WriteState#write_state{
+              highest_write_count=WriteState#write_state.highest_write_count+1,
               value=?REDUNDANCY:collect_read_value(CurrentValue, SeenValue,Datatype)
              };
        CurrentWriteRoundNoWTI < SeenWriteRoundNoWTI ->
-            TWriteState#write_state{
+            WriteState#write_state{
               highest_write_round=SeenWriteRound,
               highest_write_count=1,
               highest_write_filter=SeenLastWF,
               value=?REDUNDANCY:collect_newer_read_value(CurrentValue,SeenValue, Datatype)
              };
        true ->
-            TWriteState#write_state{
+            WriteState#write_state{
               value = ?REDUNDANCY:collect_older_read_value(CurrentValue, SeenValue, Datatype)
              }
     end.
