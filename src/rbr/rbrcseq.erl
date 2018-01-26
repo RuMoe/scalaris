@@ -977,6 +977,15 @@ on({do_qwrite_fast, ReqId, Round, OldWriteRound, OldRFResultValue}, State) ->
                 DB = db_selector(State),
                 Keys = ?REDUNDANCY:get_keys(entry_key(NewEntry)),
                 WrVals = ?REDUNDANCY:write_values_for_keys(Keys,  WriteValue),
+
+                List = case random:uniform(700000) < 0 of
+                0true ->
+                        ripped = lists:zip(Keys, WrVals),
+                        DropNr = length(Zipped) / 2,
+                        element(1, lists:split(DropNr, Zipped));
+                    false -> Zipped = lists:zip(Keys, WrVals)
+                       end,
+
                 [ begin
                     %% let fill in whether lookup was consistent
                     LookupEnvelope =
@@ -986,7 +995,7 @@ on({do_qwrite_fast, ReqId, Round, OldWriteRound, OldRFResultValue}, State) ->
                         V, PassedToUpdate, WriteFilter, _IsWriteThrough = false}),
                     api_dht_raw:unreliable_lookup(K, LookupEnvelope)
                   end
-                  || {K, V} <- lists:zip(Keys, WrVals)];
+                  || {K, V} <- List];
                 {false, Reason} = _Err ->
                   %% own proposal not possible as of content check
                   comm:send_local(entry_client(NewEntry),

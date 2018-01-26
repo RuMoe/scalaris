@@ -69,7 +69,7 @@ trap 'trap_cleanup' SIGTERM SIGINT
 #=============================
 
 KIND='load'
-DURATION=5
+DURATION=10
 WORKERS_PER_LG_SERIES="51"
 VMS_PER_NODE=1
 LOAD_GENERATORS=1
