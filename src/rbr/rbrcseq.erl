@@ -979,12 +979,13 @@ on({do_qwrite_fast, ReqId, Round, OldWriteRound, OldRFResultValue}, State) ->
                 WrVals = ?REDUNDANCY:write_values_for_keys(Keys,  WriteValue),
 
                 List = case random:uniform(700000) < 0 of
-                true ->
-                        ripped = lists:zip(Keys, WrVals),
+                    true ->
+                        Zipped = lists:zip(Keys, WrVals),
                         DropNr = length(Zipped) / 2,
                         element(1, lists:split(DropNr, Zipped));
-                    false -> Zipped = lists:zip(Keys, WrVals)
-                       end,
+                    false ->
+                        lists:zip(Keys, WrVals)
+                end,
 
                 [ begin
                     %% let fill in whether lookup was consistent
