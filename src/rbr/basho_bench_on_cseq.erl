@@ -111,10 +111,19 @@ write(Key, Val) ->
 fast_write(Key, _Val) ->
     case ets:info(?ETS_TABLE_NAME) of %% better?
         undefined ->
-            ets:new(?ETS_TABLE_NAME, [named_table]),
-            ets:insert(?ETS_TABLE_NAME, {?ROUND_KEY, pr:new(1,1)});
+            _ = spawn(fun() ->
+                    %% really ugly... spawn a process which has ownership of the table
+                    %% so that it is not cleaned up after each request
+                    ets:new(?ETS_TABLE_NAME, [public,named_table]),
+                    ets:insert(?ETS_TABLE_NAME, {?ROUND_KEY, pr:new(1,1)}),
+                    receive % never terminate
+                        {done} ->
+                            ok
+                    end
+                end);
         _ -> ok
     end,
+
 
     {?ROUND_KEY, LastFastWriteRound} = hd(ets:lookup(?ETS_TABLE_NAME, ?ROUND_KEY)),
     {RF, CC, WF} = get_write_op_addition(),
