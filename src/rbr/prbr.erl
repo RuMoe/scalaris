@@ -149,21 +149,24 @@ noop_write_filter(_, UI, X) -> {X, UI}.
 %% initialize: return initial state.
 -spec init(atom() | tuple()) -> state().
 init(DBName) ->
-    {mintime(), ?PDB:new(DBName)}.
+    Table = ?PDB:new(DBName),
+    ?PDB:set(Table, {timestamp_started_key, mintime()}),
+    Table.
 
 mintime() -> erlang:system_time() / 1.0e9 / 60.
-reply(Key, {InitTime, _}) ->
-    hd(integer_to_list(Key)) > hd(integer_to_list(trunc(mintime() - InitTime))).
+reply(Key, TableName) ->
+    {_, InitTime} = ?PDB:get(TableName, timestamp_started_key),
+    hd(integer_to_list(Key)) > hd(integer_to_list(trunc(mintime() - InitTime) div 2)).
 
 %% @doc Closes the given DB (it may be recoverable using open/1 depending on
 %%      the DB back-end).
 -spec close(state()) -> true.
-close({_,State}) -> ?PDB:close(State).
+close(State) -> ?PDB:close(State).
 
 %% @doc Closes the given DB and deletes all contents (this DB can thus not be
 %%      re-opened using open/1).
 -spec close_and_delete(state()) -> true.
-close_and_delete({_, State}) -> ?PDB:close_and_delete(State).
+close_and_delete(State) -> ?PDB:close_and_delete(State).
 
 -spec on(message(), state()) -> state().
 on({prbr, round_request, _DB, Cons, Proposer, Key, DataType, ProposerUID, ReadFilter, OpType}, TableName) ->
@@ -402,26 +405,26 @@ on({prbr, tab2list_raw, DB, Client}, TableName) ->
     TableName.
 
 -spec get_entry(any(), state()) -> entry().
-get_entry(Id, {_, TableName}) ->
+get_entry(Id, TableName) ->
     case ?PDB:get(TableName, Id) of
         {}    -> new(Id);
         Entry -> Entry
     end.
 
 -spec set_entry(entry(), state()) -> state().
-set_entry(NewEntry, {_, TableName}) ->
+set_entry(NewEntry, TableName) ->
     _ = ?PDB:set(TableName, NewEntry),
     TableName.
 
 -spec delete_entry(state(), entry()) -> db_prbr:db().
-delete_entry({_, TableName}, Entry) ->
+delete_entry(TableName, Entry) ->
     ?PDB:delete_entry(TableName, Entry).
 
 -spec get_load(state()) -> non_neg_integer().
-get_load({_, State}) -> ?PDB:get_load(State).
+get_load(State) -> ?PDB:get_load(State).
 
 -spec tab2list(state()) -> [{any(),any()}].
-tab2list({_, State}) ->
+tab2list(State) ->
     %% without prbr own data
     Entries = tab2list_raw(State),
     [ {entry_key(X), entry_val(X)} || X <- Entries].
