@@ -55,14 +55,18 @@ start_link() ->
                 ],
     SconfList = case config:read(yaws_ssl) of
                     true ->
-                        application:ensure_all_started(ssl), %% >= R16B02
-                        [{ssl, [{verify, verify_none},
-                                   {keyfile, config:read(yaws_keyfile)},
-                                   {certfile, config:read(yaws_certfile)},
-                                   {cacertfile, config:read(yaws_cacertfile)},
-                                   {password, config:read(yaws_sslpassword)}
-                                   ]}
-                             | SconfList2];
+                        _ = application:ensure_all_started(ssl), %% >= R16B02
+                        SSL= {ssl, [
+%% https://jamielinux.com/docs/openssl-certificate-authority/
+                                    {keyfile, config:read(yaws_keyfile)},
+                                    {certfile, config:read(yaws_certfile)},
+                                    {cacertfile, config:read(yaws_cacertfile)},
+                                    {verify, verify_peer},
+                                    {fail_if_no_peer_cert, true},
+                                    {password, config:read(yaws_sslpassword)}
+                                   ]},
+                        io:format("~p~n", [SSL]),
+                        [SSL | SconfList2];
                     _ -> SconfList2
                 end,
 

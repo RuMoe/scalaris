@@ -1,4 +1,4 @@
-%  @copyright 2010-2011 Zuse Institute Berlin
+%  @copyright 2010-2018 Zuse Institute Berlin
 
 %   Licensed under the Apache License, Version 2.0 (the "License");
 %   you may not use this file except in compliance with the License.
@@ -19,6 +19,6 @@
 
 % thanks to Vincent de Phily for this macro to specify required fields in
 % record where no hard-coded value makes sense at the time of the type
-% definition: 
+% definition:
 -define(required(Record, Field),
         throw({record_field_required, Record, Field, ?MODULE})).

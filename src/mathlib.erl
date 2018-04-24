@@ -103,12 +103,11 @@ nearestCentroid(U, [X|Centroids]) ->
                              false -> Current
                          end
                 end
-        end, First, Centroids)
-    .
+        end, First, Centroids).
 
 %% @doc Find indices of closest centroids.
 -spec closestPoints(dc_centroids:centroids())
-    -> {dc_centroids:centroid(), dc_centroids:centroid()} | none.
+    -> {float(), dc_centroids:centroid(), dc_centroids:centroid()} | none.
 closestPoints([]) -> none;
 closestPoints([_]) -> none;
 closestPoints([First, Second|_] = Centroids) ->
@@ -126,8 +125,7 @@ closestPoints([First, Second|_] = Centroids) ->
                             false -> Acc
                         end
                 end
-    end, {FirstDist, First, Second}, Centroids)
-.
+    end, {FirstDist, First, Second}, Centroids).
 
 -spec zeros_feeder(0..10000) -> {0..10000}.
 zeros_feeder(N) -> {N}.
@@ -143,17 +141,16 @@ aggloClustering(Centroids, Radius) when Radius >= 0 ->
     case closestPoints(Centroids) of
         none -> Centroids;
         {Min, I, J} -> aggloClusteringHelper(Centroids, Radius, Min, I, J)
-    end
-    .
+    end.
 
 -spec aggloClusteringHelper
         (Centroids::[dc_centroids:centroid(),...], Radius::number(),
-         Min::number(), I::dc_centroids:centroid(), J::dc_centroids:centroid()) ->
+         Min::float(), I::dc_centroids:centroid(), J::dc_centroids:centroid()) ->
          dc_centroids:centroids().
 % Note: closestPoints/1 creates Min, I, J and only returns {-1, -1, -1} if
 % Centroids contains less than two elements. This is not the case in the first
 % pattern and we can thus assume these values are pos_integer().
-aggloClusteringHelper(Centroids, _Radius, 0, _, _) -> Centroids;
+aggloClusteringHelper(Centroids, _Radius, 0.0, _, _) -> Centroids;
 aggloClusteringHelper(Centroids, Radius, Min, I, J) when Min =< Radius ->
     {C1, S1} = dc_centroids:get_coordinate_and_relative_size(I),
     {C2, S2} = dc_centroids:get_coordinate_and_relative_size(J),
@@ -165,8 +162,7 @@ aggloClusteringHelper(Centroids, Radius, Min, I, J) when Min =< Radius ->
         none -> NewCentroids;
         {Min1, I1, J1} ->
             aggloClusteringHelper(NewCentroids, Radius, Min1, I1, J1)
-    end
-    ;
+    end;
 aggloClusteringHelper(Centroids, _Radius, _Min, _I, _J) ->
     Centroids.
 

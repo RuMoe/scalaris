@@ -1,4 +1,4 @@
-// Copyright 2015-2017 Zuse Institute Berlin
+// Copyright 2015-2018 Zuse Institute Berlin
 //
 //    Licensed under the Apache License, Version 2.0 (the "License");
 //    you may not use this file except in compliance with the License.
@@ -14,12 +14,19 @@
 
 #include "ssl-connection.hpp"
 
+#include <boost/algorithm/string.hpp>
+
 namespace scalaris {
 
   SSLConnection::SSLConnection(std::string hostname, std::string link)
       : Connection(hostname, link),
         ctx(boost::asio::ssl::context_base::method::sslv23),
         socket(ioservice, ctx) {
+    try {connect();}
+    catch(scalaris::ConnectionError) {}
+  }
+
+  void SSLConnection::connect() {
     using boost::asio::ip::tcp;
 
     socket.set_verify_mode(boost::asio::ssl::verify_peer);
@@ -29,6 +36,11 @@ namespace scalaris {
         });
 
     // ctx.load_verify_file("ca.pem");
+    ctx.set_password_callback(
+        [this](std::size_t max_length,
+               boost::asio::ssl::context::password_purpose purpose) {
+          return this->password_callback(max_length, purpose);
+        });
 
     // Determine the location of the server.
     tcp::resolver resolver(ioservice);
@@ -38,9 +50,11 @@ namespace scalaris {
     // Try each endpoint until we successfully establish a connection.
     boost::system::error_code ec;
     boost::asio::connect(socket.lowest_layer(), endpoint_iterator, ec);
+    hasToConnect = false;
     if (ec) {
       std::cout << __FILE__ << ":" << __LINE__ << " " << ec.message()
                 << std::endl;
+      hasToConnect = true;
       throw ConnectionError(ec.message());
     }
 
@@ -48,6 +62,7 @@ namespace scalaris {
     if (ec) {
       std::cout << __FILE__ << ":" << __LINE__ << " " << ec.message()
                 << std::endl;
+      hasToConnect = true;
       throw ConnectionError(ec.message());
     }
   }
@@ -57,6 +72,27 @@ namespace scalaris {
       socket.lowest_layer().close();
     }
   }
+
+  void SSLConnection::set_verify_file(const std::string& file) {
+    // Load a certification authority file for performing verification.
+    ctx.load_verify_file(file); //"ca.pem"
+  }
+
+  void SSLConnection::set_certificate_file(const std::string& file) {
+    //  Use a certificate from a file.
+    ctx.use_certificate_file(file, boost::asio::ssl::context_base::file_format::pem);
+  }
+  void SSLConnection::set_private_key(const std::string& file) {
+    // Use a private key from a file.
+    ctx.use_private_key_file(file, boost::asio::ssl::context_base::file_format::pem);
+  }
+
+  void SSLConnection::set_rsa_private_key(const std::string& file) {
+    // Use an RSA private key from a file.
+    ctx.use_rsa_private_key_file(file, boost::asio::ssl::context_base::file_format::pem);
+  }
+
+  void SSLConnection::set_password(const std::string& pw) { password = pw; }
 
   bool SSLConnection::isOpen() const {
     return socket.lowest_layer().is_open();
@@ -81,18 +117,25 @@ namespace scalaris {
     return true;
   }
 
-  Json::Value SSLConnection::exec_call(const std::string& methodname,
-                                       Json::Value params) {
+  std::string SSLConnection::password_callback(
+      std::size_t max_length,
+      boost::asio::ssl::context::password_purpose purpose) {
     // @todo
+    // for_reading or for_writing
+    return password;
+  }
+
+  Json::Value SSLConnection::exec_call(const std::string& methodname,
+                                       Json::Value params, bool reconnect) {
+    // FIXME add reconnect
     Json::Value call;
     call["method"] = methodname;
     call["params"] = params;
     call["id"] = 0;
-    std::stringstream json_call;
-    Json::StreamWriterBuilder builder;
-    std::unique_ptr<Json::StreamWriter> writer(builder.newStreamWriter());
-    writer->write(call, &json_call);
-    std::string json_call_str = json_call.str();
+
+    Json::FastWriter w;
+    std::string json_call_str = w.write(call);
+    boost::trim_right(json_call_str);
 
     boost::asio::streambuf request;
     std::ostream request_stream(&request);
@@ -109,6 +152,7 @@ namespace scalaris {
     if (ec) {
       std::cout << __FILE__ << ":" << __LINE__ << " " << ec.message()
                 << std::endl;
+      hasToConnect = true;
       throw ConnectionError(ec.message());
     }
 
@@ -124,12 +168,14 @@ namespace scalaris {
     std::getline(response_stream, status_message);
     if (!response_stream || http_version.substr(0, 5) != "HTTP/") {
       std::cout << "Invalid response\n";
+      hasToConnect = true;
       throw ConnectionError("Invalid response");
     }
     if (status_code != 200) {
       std::cout << "Response returned with status code " << status_code << "\n";
       std::stringstream error;
       error << "Response returned with status code " << status_code;
+      hasToConnect = true;
       throw ConnectionError(error.str());
     }
 
@@ -153,6 +199,7 @@ namespace scalaris {
     std::string errs;
     bool ok = Json::parseFromStream(reader_builder, json_result, &value, &errs);
     if (!ok) {
+      hasToConnect = true;
       throw ConnectionError(errs);
     }
 
@@ -166,24 +213,28 @@ namespace scalaris {
       if (!id.isIntegral() or id.asInt() != 0) {
         std::stringstream error;
         error << value.toStyledString() << " is no id=0";
+        hasToConnect = true;
         throw ConnectionError(error.str());
       }
       Json::Value jsonrpc = value["jsonrpc"];
       if (!jsonrpc.isString()) {
         std::stringstream error;
         error << value.toStyledString() << " has no string member: jsonrpc";
+        hasToConnect = true;
         throw ConnectionError(error.str());
       }
       Json::Value result = value["result"];
       if (!result.isObject()) {
         std::stringstream error;
         error << value.toStyledString() << " has no object member: result";
+        hasToConnect = true;
         throw ConnectionError(error.str());
       }
       return result;
     } else {
       std::stringstream error;
       error << value.toStyledString() << " is no json object";
+      hasToConnect = true;
       throw ConnectionError(error.str());
     }
   }

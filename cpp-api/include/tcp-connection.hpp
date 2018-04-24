@@ -14,17 +14,17 @@
 
 #pragma once
 
-#include <array>
-#include <iostream>
-#include <string>
-#include <stdexcept>
-
-#include <boost/asio.hpp>
+#include "connection.hpp"
 #include "converter.hpp"
 #include "exceptions.hpp"
 #include "json/json.h"
 
-#include "connection.hpp"
+#include <boost/asio.hpp>
+
+#include <array>
+#include <iostream>
+#include <stdexcept>
+#include <string>
 
 namespace scalaris {
 
@@ -32,20 +32,25 @@ namespace scalaris {
   class TCPConnection : public Connection {
     boost::asio::io_service ioservice;
     boost::asio::ip::tcp::socket socket;
-    //std::string hostname;
-    //std::string link;
-    //bool closed=false;
+
+    bool hasToConnect = true;
+
   public:
+    TCPConnection() = default;
+
     /**
      * creates a connection instance
      * @param _hostname the host name of the Scalaris instance
-     * @param _link the URL for JSON-RPC
-     * @param port the TCP port of the Scalaris instance
+     * @param _link the pathURL for JSON-RPC
+     * @param _port the TCP port of the Scalaris instance
      */
-    TCPConnection(std::string _hostname,
-                  std::string _link  = "jsonrpc.yaws");
+    TCPConnection(const std::string& _hostname,
+                  const std::string& _link = "jsonrpc.yaws",
+                  unsigned _port = 8000);
 
     ~TCPConnection();
+
+    bool needsConnect() const override { return hasToConnect; };
 
     /// checks whether the TCP connection is alive
     bool isOpen() const;
@@ -54,10 +59,22 @@ namespace scalaris {
     void close();
 
     /// returns the server port of the TCP connection
-    virtual unsigned get_port();
+    virtual unsigned getPort();
+
+    /// connects to the specified server
+    /// it can also be used, if the connection failed
+    void connect() override;
+
+    std::string toString() const override {
+      std::stringstream s;
+      s << "http://" << hostname << ":" << port << "/" << link;
+      return s.str();
+    };
 
   private:
-    virtual Json::Value exec_call(const std::string& methodname, Json::Value params);
+    virtual Json::Value exec_call(const std::string& methodname,
+                                  Json::Value params,
+                                  bool reconnect = true) override;
     Json::Value process_result(const Json::Value& value);
   };
-}
+} // namespace scalaris

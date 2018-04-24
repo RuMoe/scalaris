@@ -1,4 +1,4 @@
-% @copyright 2012-2017 Zuse Institute Berlin,
+% @copyright 2012-2018 Zuse Institute Berlin,
 
 %   Licensed under the Apache License, Version 2.0 (the "License");
 %   you may not use this file except in compliance with the License.
@@ -23,7 +23,7 @@
 %%-define(PDB, pdb_ets).
 -define(PDB, pdb).
 -define(REDUNDANCY, (config:read(redundancy_module))).
--define(READ_RETRY_COUNT, (config:read(read_retry_without_increment))).
+-define(READ_RETRY_COUNT, (config:read(read_attempts_without_progress))).
 
 %%-define(TRACE(X,Y), log:pal("~p" X,[self()|Y])).
 %%-define(TRACE(X,Y),
@@ -45,6 +45,7 @@
 -export([qwrite_fast/8, qwrite_fast/10]).
 -export([get_db_for_id/2]).
 
+-export([check_config/0]).
 -export([start_link/3]).
 -export([init/1, on/2]).
 
@@ -55,8 +56,7 @@
 
 %% Aggregation of the distributed write state received in round_request
 %% or read replies.
--record(write_state, {
-                      % The highest write round received in replies
+-record(write_state, {% The highest write round received in replies
                       highest_write_round :: pr:pr(),
                       % The number of replies seen with this round
                       highest_write_count :: non_neg_integer(),
@@ -107,7 +107,7 @@
                   is_read | any(), %% value to write if entry belongs to write
                   read | write | denied_write, %% operation type
                   pr:pr(), %% my round
-                  any(), %% number of times a read might be retried
+                  any(), %% read retry information
                   replies() %% maintains replies to check for consistent quorums
 %%% Attention: There is a case that checks the size of this tuple below!!
                  }.
@@ -327,12 +327,17 @@ on({request_cleanup, Client, EntryReg, Result}, State) ->
     State;
 
 %% qread step 1: request the current read/write rounds of + values from replicas.
+on({qround_request, Client, EntryReg, Key, DataType, ReadFilter, OpType=read, RetriggerAfter}, State) ->
+    ReadRetryInfo =  {?READ_RETRY_COUNT, _MaxSeenReadRoundNum = 0, _MaxSeenWriteRoundNum = 0},
+    gen_component:post_op({qround_request, Client, EntryReg, Key, DataType, ReadFilter,
+                           OpType, ReadRetryInfo, RetriggerAfter}, State);
+
 on({qround_request, Client, EntryReg, Key, DataType, ReadFilter, OpType, RetriggerAfter}, State) ->
     gen_component:post_op({qround_request, Client, EntryReg, Key, DataType, ReadFilter,
-                           OpType, RetriggerAfter, ?READ_RETRY_COUNT, 0, 0}, State);
+                           OpType, _ReadRetryInfo=none, RetriggerAfter}, State);
 
-on({qround_request, Client, EntryReg, Key, DataType, ReadFilter, OpType, RetriggerAfter,
-   ReadRetries, LastHighestReadRound,LastHighestWriteRound}, State) ->
+on({qround_request, Client, EntryReg, Key, DataType, ReadFilter, OpType, ReadRetryInfo,
+        RetriggerAfter}, State) ->
     ?TRACE("rbrcseq:read step 1: round_request, Client ~p~n", [Client]),
     %% assign new reqest-id; (also assign new ReqId when retriggering)
 
@@ -357,7 +362,7 @@ on({qround_request, Client, EntryReg, Key, DataType, ReadFilter, OpType, Retrigg
     %% create local state for the request
     Entry = entry_new_round_request(qround_request, ReqId, EntryReg, Key, DataType, Client,
                                     period(State), ReadFilter, RetriggerAfter, OpType,
-                                    {ReadRetries, LastHighestReadRound, LastHighestWriteRound}),
+                                    ReadRetryInfo),
     _ = case save_entry(Entry, tablename(State)) of
             ok ->
                 [ begin
@@ -420,28 +425,37 @@ on({qround_request_collect,
                     %% majority replied, but we do not have a consistent quorum
                     delete_entry(NewEntry, tablename(State)),
 
-                    %% check if read can be retried because we made progress since
-                    %% last read
-                    WriteState = NewReplies#rr_replies.write_state,
-                    SeenHighestReadRound = pr:get_r(NewReplies#rr_replies.highest_read_round),
-                    SeenHighestWriteRound = pr:get_r(WriteState#write_state.highest_write_round),
-                    {RetriesRemaining, HighestReadRound, HighestWriteRound} =
-                        entry_get_read_retry_info(NewEntry),
-                    {NewRetries, NewHighestReadRound, NewHighestWriteRound} =
-                        case SeenHighestReadRound =< HighestReadRound andalso
-                             SeenHighestWriteRound =< HighestWriteRound of
-                                         true ->
-                                            {RetriesRemaining - 1, HighestReadRound,
-                                             HighestWriteRound};
-                                         false ->
-                                            {?READ_RETRY_COUNT, SeenHighestReadRound,
-                                             SeenHighestWriteRound}
-                                 end,
-                    RetryReadWithoutIncrement =
-                            entry_optype(NewEntry) =:= read andalso
-                            RetriesRemaining  > 0,
-                    case RetryReadWithoutIncrement of
+                    {RetryWithoutIncrement, ReadRetryInfo} =
+                        case entry_optype(NewEntry) =:= read of
+                            true ->
+                                %% check if read can be retried because we made progress since
+                                %% last read or our attempt number is not depleted
+                                WriteState = NewReplies#rr_replies.write_state,
+                                SeenMaxRR = pr:get_r(NewReplies#rr_replies.highest_read_round),
+                                SeenMaxWR = pr:get_r(WriteState#write_state.highest_write_round),
+                                {RetriesRemaining, PrevMaxRR, PrevMaxWR} =
+                                    entry_get_read_retry_info(NewEntry),
+                                NewReadRetryInfo =
+                                    case SeenMaxRR =< PrevMaxRR andalso
+                                         SeenMaxWR =< PrevMaxWR of
+                                                     true -> %% no progress since last retry
+                                                        {RetriesRemaining - 1, PrevMaxRR,
+                                                         PrevMaxWR};
+                                                     false ->
+                                                        {?READ_RETRY_COUNT,
+                                                         max(PrevMaxRR, SeenMaxRR),
+                                                         max(PrevMaxRR, SeenMaxWR)}
+                                             end,
+                                {RetriesRemaining > 0, NewReadRetryInfo};
+                            false ->
+                                %% writes always modify acceptor states during
+                                %% first phase
+                                {false, none}
+                        end,
+
+                    case RetryWithoutIncrement of
                         true ->
+                            %% retry the read without causing a state change in acceptors
                             gen_component:post_op({qround_request,
                                             entry_client(NewEntry),
                                             entry_openreqentry(NewEntry),
@@ -449,10 +463,8 @@ on({qround_request_collect,
                                             entry_datatype(NewEntry),
                                             entry_filters(NewEntry),
                                             entry_optype(NewEntry),
-                                            entry_retrigger(NewEntry),
-                                            NewRetries,
-                                            NewHighestReadRound,
-                                            NewHighestWriteRound}, State);
+                                            ReadRetryInfo,
+                                            entry_retrigger(NewEntry)}, State);
                         false ->
                             %% do a qread with highest received read round + 1
                             gen_component:post_op({qread,
@@ -464,18 +476,7 @@ on({qround_request_collect,
                                            entry_retrigger(NewEntry),
                                            1+pr:get_r(entry_my_round(NewEntry)),
                                            entry_optype(NewEntry)}, State)
-                    end;
-                write_through ->
-                    %% majority replied, we have not a consistent quorum, but we can
-                    %% skip qread phase and go directly to write through
-
-                    % transform reply record to r_replies since that is what WT expects
-                    RReplies = #r_replies{ack_count = 0, deny_count = 0, % doesn't matter..
-                                          write_state = NewReplies#rr_replies.write_state},
-                    NewEntry2 = entry_set_replies(NewEntry, RReplies),
-                    delete_entry(NewEntry2, tablename(State)),
-                    gen_component:post_op({qread_initiate_write_through, NewEntry2},
-                                           State)
+                    end
             end
     end;
 
@@ -842,8 +843,7 @@ on({qread_write_through_collect, ReqId,
                                  entry_filters(UnpackedEntry)}
                         end,
                     gen_component:post_op({qround_request, Client, entry_openreqentry(Entry),
-                      Key, entry_datatype(Entry), Filter, write,
-                      entry_retrigger(Entry) - entry_period(Entry)},
+                      Key, entry_datatype(Entry), Filter, write, entry_retrigger(Entry) - entry_period(Entry)},
                       State)
             end
     end;
@@ -978,15 +978,6 @@ on({do_qwrite_fast, ReqId, Round, OldWriteRound, OldRFResultValue}, State) ->
                 Keys = ?REDUNDANCY:get_keys(entry_key(NewEntry)),
                 WrVals = ?REDUNDANCY:write_values_for_keys(Keys,  WriteValue),
 
-                List = case random:uniform(700000) < 0 of
-                    true ->
-                        Zipped = lists:zip(Keys, WrVals),
-                        DropNr = length(Zipped) / 2,
-                        element(1, lists:split(DropNr, Zipped));
-                    false ->
-                        lists:zip(Keys, WrVals)
-                end,
-
                 [ begin
                     %% let fill in whether lookup was consistent
                     LookupEnvelope =
@@ -996,7 +987,7 @@ on({do_qwrite_fast, ReqId, Round, OldWriteRound, OldRFResultValue}, State) ->
                         V, PassedToUpdate, WriteFilter, _IsWriteThrough = false}),
                     api_dht_raw:unreliable_lookup(K, LookupEnvelope)
                   end
-                  || {K, V} <- List];
+                  || {K, V} <- lists:zip(Keys, WrVals)];
                 {false, Reason} = _Err ->
                   %% own proposal not possible as of content check
                   comm:send_local(entry_client(NewEntry),
@@ -1334,7 +1325,7 @@ new_read_replies() ->
 -spec new_write_state() -> #write_state{}.
 new_write_state() ->
     #write_state{highest_write_count = 0, highest_write_round = pr:new(0,0),
-                 highest_write_filter = none, value = new_empty_value}.
+                  highest_write_filter = none, value = new_empty_value}.
 
 -spec new_write_replies() -> #w_replies{}.
 new_write_replies() ->
@@ -1425,7 +1416,6 @@ add_rr_reply(Replies, _DBSelector, SeenReadRound, SeenWriteRound, Value,
 
                 IsRead = OpType =:= read,
                 IsCommutingRead = IsRead andalso is_read_commuting(ReadFilter, NewHighestWF, Datatype),
-                UsedPartialReadFilter = ReadFilter =/= fun prbr:noop_read_filter/1,
 
                 if  %% A consistent quorum is the base case for successful delivery
                     ConsQuorum orelse
@@ -1443,18 +1433,6 @@ add_rr_reply(Replies, _DBSelector, SeenReadRound, SeenWriteRound, Value,
                         ReadValue = ?REDUNDANCY:get_read_value(CollectedVal, ReadFilter),
                         T1 = R3#rr_replies{write_state=NewWriteState#write_state{value=ReadValue}},
                         {consistent, T1};
-
-                    %% There is a write in progress (however, a majority might have
-                    %% already accepted the proposal). It is very likely that a
-                    %% subsequent qread will also see inconsistent write rounds
-                    %% which will trigger a WriteThrough. Since this request does
-                    %% not use a noop read filter, write_through_initiate will start
-                    %% a new read anyway. Therefore, we can safely skip qread here
-                    %% and proceed directly to the WriteThrough to prevent doing the
-                    %% same thing twice.
-      % TODO: TEMPORARILY DISABLED
-      %              not ConsWriteRounds andalso UsedPartialReadFilter ->
-      %                  {write_through, R3};
 
                     %% For everything else, the default is starting a qread which
                     %% might receive a consistent state
@@ -1525,24 +1503,23 @@ add_read_reply(Replies, _DBSelector, AssignedRound, Val, SeenWriteRound,
     NewRound = erlang:max(CurrentRound, AssignedRound),
     {Result, R4, NewRound}.
 
--spec update_write_state(#write_state{}, pr:pr(), prbr:write_filter(),
-                         any(), module()) -> #write_state{}.
-update_write_state(WriteState, SeenWriteRound, SeenLastWF, SeenValue, Datatype) ->
+-spec update_write_state(#write_state{}, pr:pr(), prbr:write_filter(), any(), module()) -> #write_state{}.
+update_write_state(WriteState, SeenRound, SeenLastWF, SeenValue, Datatype) ->
     %% extract write through info for round comparisons since
     %% they can be key-dependent if something different than
     %% replication is used for redundancy
-    CurrentWriteRoundNoWTI = pr:set_wti(WriteState#write_state.highest_write_round, none),
-    SeenWriteRoundNoWTI = pr:set_wti(SeenWriteRound, none),
+    CurrentRoundNoWTI = pr:set_wti(WriteState#write_state.highest_write_round, none),
+    SeenRoundNoWTI = pr:set_wti(SeenRound, none),
 
     CurrentValue = WriteState#write_state.value,
-    if CurrentWriteRoundNoWTI =:= SeenWriteRoundNoWTI ->
-           WriteState#write_state{
+    if CurrentRoundNoWTI =:= SeenRoundNoWTI ->
+            WriteState#write_state{
               highest_write_count=WriteState#write_state.highest_write_count+1,
               value=?REDUNDANCY:collect_read_value(CurrentValue, SeenValue,Datatype)
              };
-       CurrentWriteRoundNoWTI < SeenWriteRoundNoWTI ->
+       CurrentRoundNoWTI < SeenRoundNoWTI ->
             WriteState#write_state{
-              highest_write_round=SeenWriteRound,
+              highest_write_round=SeenRound,
               highest_write_count=1,
               highest_write_filter=SeenLastWF,
               value=?REDUNDANCY:collect_newer_read_value(CurrentValue,SeenValue, Datatype)
@@ -1700,4 +1677,9 @@ set_period(State, Val) -> setelement(3, State, Val).
 get_db_for_id(DBName, Key) ->
     {DBName, ?RT:get_key_segment(Key)}.
 
+
+%% @doc Checks whether config parameters exist and are valid.
+-spec check_config() -> boolean().
+check_config() ->
+    config:cfg_is_integer(read_attempts_without_progress).
 
