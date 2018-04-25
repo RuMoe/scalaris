@@ -73,7 +73,7 @@ msg_prepare_reply(Client, ReqId, ReadRound, WriteRound, CVal) ->
 
 -spec msg_prepare_deny(comm:mypid(), any(), pr:pr(), pr:pr()) -> ok.
 msg_prepare_deny(Client, ReqId, TriedReadRound, RequiredReadRound) ->
-    comm:send(Client, {read_deny, ReqId, TriedReadRound, RequiredReadRound}).
+    comm:send(Client, {read_deny, ReqId, inc, TriedReadRound, RequiredReadRound}).
 
 -spec msg_vote_reply(comm:mypid(), any()) -> ok.
 msg_vote_reply(Client, ReqId) ->
@@ -81,7 +81,7 @@ msg_vote_reply(Client, ReqId) ->
 
 -spec msg_vote_deny(comm:mypid(), any(), pr:pr(), pr:pr()) -> ok.
 msg_vote_deny(Client, ReqId, TriedWriteRound, RequiredReadRound) ->
-    comm:send(Client, {read_deny, ReqId, TriedWriteRound, RequiredReadRound}).
+    comm:send(Client, {read_deny, ReqId, inc, TriedWriteRound, RequiredReadRound}).
 
 
 %% initialize: return initial state.
@@ -191,6 +191,7 @@ on({crdt_acceptor, vote, _Cons, Proposer, ReqId, Key, DataType, ProposalRound, C
                 _ = set_entry(NewEntry3, TableName),
                 msg_vote_reply(Proposer, ReqId);
             false ->
+                _ = set_entry(NewEntry, TableName),
                 msg_vote_deny(Proposer, ReqId, ProposalRound, CurrentReadRound)
         end,
     TableName;
