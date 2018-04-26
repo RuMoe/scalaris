@@ -13,8 +13,7 @@
 #
 # Call:
 # 	./basho-bench.sh
-#
-# Configuration:
+# # Configuration:
 #   All configuration settings, including documentation and default values can
 #   be found in basho-bench.cfg.
 #   A quick-config section is provided below for overriding values from the
@@ -69,8 +68,9 @@ trap 'trap_cleanup' SIGTERM SIGINT
 #=============================
 
 KIND='load'
-DURATION=10
-WORKERS_PER_LG_SERIES="51"
+DURATION=2
+WORKERS_PER_LG_SERIES="1 2 4 8 16 32 64 128"
+OPERATIONS_SERIES="[{put,10},{get,0}] [{put,9},{get,1}] [{put,8},{get,2}] [{put,7},{get,3}] [{put,6},{get,4}] [{put,5},{get,5}] [{put,4},{get,6}] [{put,3},{get,7}] [{put,2},{get,8}] [{put,1},{get,9}] [{put,0},{get,10}]"
 VMS_PER_NODE=1
 LOAD_GENERATORS=1
 
@@ -149,16 +149,26 @@ main_size(){
 }
 
 main_load(){
+    var=1
     for WORKERS_PER_LG in $WORKERS_PER_LG_SERIES; do
+    for OPS in $OPERATIONS_SERIES; do
+        echo "$OPS"
+        OPERATIONS=$OPS
+        nodeend=$((NODES-1))
+        NODELIST="cumu01-[00-$nodeend]"
+        echo "$NODELIST"
         WORKERS=$((WORKERS_PER_LG*LOAD_GENERATORS))
         log info "WORKERS=$WORKERS"
         log info "WORKERS_PER_LG=$WORKERS_PER_LG"
+        log info "OPERATIONS=$OPERATIONS"
 
         WORKERS=$(printf "%04i" $WORKERS)
-        PREFIX="load$WORKERS"
+        PREFIX="load$WORKERS-$var"
         log info "starting load benchmark with $WORKERS ($WORKERS_PER_LG*$LOAD_GENERATORS)"
 
         repeat_benchmark
+        let "var++"
+    done
     done
 }
 
@@ -483,13 +493,13 @@ write_config() {
 {mode, $MODE}.
 {duration, $DURATION}.
 {concurrent, $WORKERS_PER_LG}.
-%{operations, [{put,2}, {get, 8}]}.
-{operations,[
-        {1, [{put, 1}, {get, 0}]},
-        {1, [{put, 0}, {get, 1}]}
-    ]}.
+{operations, $OPERATIONS}.
+%{operations,[
+%        {1, [{put, 1}, {get, 0}]},
+%        {1, [{put, 0}, {get, 1}]}
+%    ]}.
 
-{driver, basho_bench_driver_scalaris}.
+{driver, basho_bench_driver_scalaris_crdt}.
 {key_generator, {int_to_str, {function, basho_bench_fixed_keygen, fixed, [12345]}}}.
 
 %% size in Bytes
