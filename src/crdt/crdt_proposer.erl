@@ -557,4 +557,4 @@ round_inc(Round, ID) ->
 -spec next_read_batching_interval() -> non_neg_integer().
 next_read_batching_interval() ->
     Div = randoms:rand_uniform(0, ?READ_BATCHING_INTERVAL_DIVERGENCE*2 + 1),
-    ?READ_BATCHING_INTERVAL - ?READ_BATCHING_INTERVAL_DIVERGENCE + Div,
+    ?READ_BATCHING_INTERVAL - ?READ_BATCHING_INTERVAL_DIVERGENCE + Div.
