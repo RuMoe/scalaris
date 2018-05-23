@@ -30,7 +30,7 @@
 namespace scalaris {
 
   /// represents a SSL connection to Scalaris to execute JSON-RPC requests
-  class SSLConnection : public Connection {
+  class SSLConnection final : public Connection {
     boost::asio::io_service ioservice;
     boost::asio::ssl::context ctx;
     boost::asio::ssl::stream<boost::asio::ip::tcp::socket> socket;
@@ -49,7 +49,7 @@ namespace scalaris {
 
     ~SSLConnection();
 
-    bool needsConnect() const override { return hasToConnect; };
+    bool needsConnect() const { return hasToConnect; };
 
     /// checks whether the TCP connection is alive
     bool isOpen() const;
@@ -58,11 +58,11 @@ namespace scalaris {
     void close();
 
     /// returns the server port of the TCP connection
-    virtual unsigned get_port();
+    unsigned getPort() const;
 
     /// connects to the specified server
     /// it can also be used, if the connection failed
-    void connect() override;
+    void connect();
 
     void set_verify_file(const std::string& file);
     void set_certificate_file(const std::string& file);
@@ -70,7 +70,7 @@ namespace scalaris {
     void set_rsa_private_key(const std::string& file);
     void set_password(const std::string& file);
 
-    std::string toString() const override {
+    std::string toString() const {
       std::stringstream s;
       s << "https://" << hostname << ":" << port << "/" << link;
       return s.str();
@@ -78,7 +78,7 @@ namespace scalaris {
 
   private:
     virtual Json::Value exec_call(const std::string& methodname,
-                                  Json::Value params, bool reconnect = true) override;
+                                  Json::Value params, bool reconnect = true);
     Json::Value process_result(const Json::Value& value);
 
     bool verify_callback(bool preverified, boost::asio::ssl::verify_context& ctx);

@@ -24,9 +24,9 @@
 %-define(TRACE(X,Y), ct:pal(X,Y)).
 -define(TRACE(X,Y), ok).
 
--define(READ_BATCHING, true).
+-define(READ_BATCHING, config:read(read_batching)).
 -define(READ_BATCHING_INTERVAL, 10).
--define(READ_BATCHING_INTERVAL_DIVERGENCE, 2). 
+-define(READ_BATCHING_INTERVAL_DIVERGENCE, 2).
 
 -include("scalaris.hrl").
 
@@ -35,6 +35,7 @@
 -export([write/5, write_eventual/5]).
 -export([read/5, read_eventual/5]).
 
+-export([check_config/0]).
 -export([start_link/3]).
 -export([init/1, on/2]).
 
@@ -76,11 +77,11 @@
 start_link(DHTNodeGroup, Name, DBSelector) ->
     {ok, Pid} = gen_component:start_link(?MODULE, fun ?MODULE:on/2, DBSelector,
                              [{pid_groups_join_as, DHTNodeGroup, Name}]),
-    case ?READ_BATCHING of
-        false -> ok;
-        true ->
-            comm:send_local_after(next_read_batching_interval(), Pid, {read_batch_trigger})
-    end,
+    _ = case ?READ_BATCHING of
+            false -> ok;
+            true ->
+                comm:send_local_after(next_read_batching_interval(), Pid, {read_batch_trigger})
+        end,
     {ok, Pid}.
 
 -spec init(dht_node_state:db_selector()) -> state().
@@ -114,6 +115,7 @@ write_eventual(CSeqPidName, Client, Key, DataType, UpdateFun) ->
 -spec start_request(pid_groups:pidname(), comm:message()) -> ok.
 start_request(CSeqPidName, Msg) ->
     Pid = pid_groups:find_a(CSeqPidName),
+    trace_mpath:log_info(self(), {start_request, request, Msg}),
     comm:send_local(Pid, Msg).
 
 
@@ -121,24 +123,24 @@ start_request(CSeqPidName, Msg) ->
 
 %%%%% batching loops
 on({add_to_read_batch, Client, Key, DataType, QueryFun}, State) ->
-    {Id, Count, Reqs} = 
-    case get_entry(read_batch_entry, tablename(State)) of
-        undefined ->
-            {read_batch_entry, 0, dict:new()};
-        Batch -> Batch
-    end,
+    {Id, Count, Reqs} =
+        case get_entry(read_batch_entry, tablename(State)) of
+            undefined ->
+                {read_batch_entry, 0, dict:new()};
+            Batch -> Batch
+        end,
     ?TRACE("Add to batch ~p",  [{Key, DataType, QueryFun, Count}]),
     NewReqs = dict:append(Key, {Client, DataType, QueryFun}, Reqs),
     _ = save_entry({Id, Count+1, NewReqs}, tablename(State)),
     State;
 
 on({read_batch_trigger}, State) ->
-    {Id, Count, Reqs} = 
-    case get_entry(read_batch_entry, tablename(State)) of
-        undefined ->
-            {read_batch_entry, 0, dict:new()};
-        Batch -> Batch
-    end,
+    {Id, Count, Reqs} =
+        case get_entry(read_batch_entry, tablename(State)) of
+            undefined ->
+                {read_batch_entry, 0, dict:new()};
+            Batch -> Batch
+        end,
 
     case Count of
         0 -> ok; % no reqs queued
@@ -205,6 +207,9 @@ on({read, strong, {prepare_reply, ReqId, UsedReadRound, WriteRound, CVal}}, Stat
                         QueryFun = entry_fun(NewEntry),
                         Type = entry_datatype(NewEntry),
                         ReturnVal = Type:apply_query(QueryFun, NewReplies#r_replies.value),
+                        trace_mpath:log_info(self(), {read_strong_cons_done,
+                                                      crdt_value, NewReplies#r_replies.value,
+                                                      return_value, ReturnVal}),
                         inform_client(read_done, Entry, ReturnVal),
                         delete_entry(Entry, tablename(State)),
                         State;
@@ -233,6 +238,9 @@ on({read, strong, {prepare_reply, ReqId, UsedReadRound, WriteRound, CVal}}, Stat
                         NextStepEntry = entry_set_replies(TEntry, NewReplies#r_replies{reply_count=0}),
                         save_entry(NextStepEntry, tablename(State)),
 
+                        trace_mpath:log_info(self(), {read_strong_phase2_start,
+                                                      round, UsedReadRound,
+                                                      value, NewReplies#r_replies.value}),
                         This = comm:reply_as(comm:this(), 3, {read, strong, '_'}),
                         Msg = {crdt_acceptor, vote, '_', This, NewReqId, key,
                                entry_datatype(NewEntry), UsedReadRound, NewReplies#r_replies.value},
@@ -256,13 +264,16 @@ on({read, strong, {vote_reply, ReqId, done}}, State) ->
                         QueryFun = entry_fun(NewEntry),
                         DataType = entry_datatype(NewEntry),
                         ReturnVal = DataType:apply_query(QueryFun, NewReplies#r_replies.value),
+                        trace_mpath:log_info(self(), {read_strong_done,
+                                                      crdt_value, NewReplies#r_replies.value,
+                                                      return_value, ReturnVal}),
                         inform_client(read_done, Entry, ReturnVal),
                         delete_entry(Entry, tablename(State))
                 end
         end,
     State;
 
-on({read, strong, {read_deny, ReqId, RetryMode, _TriedRound, RequiredRound}}, State) ->
+on({read, strong, {read_deny, ReqId, RetryMode, TriedRound, RequiredRound}}, State) ->
     _ = case get_entry(ReqId, tablename(State)) of
             undefined ->
                 %% ignore replies for unknown requests
@@ -276,6 +287,11 @@ on({read, strong, {read_deny, ReqId, RetryMode, _TriedRound, RequiredRound}}, St
                                 fixed -> round_inc(RequiredRound)
                             end,
 
+                trace_mpath:log_info(self(), {read_strong_deny,
+                                              retry_mode, RetryMode,
+                                              round_tried, TriedRound,
+                                              round_requed, RequiredRound
+                                             }),
                 %% retry the read in a higher round...
                 %% TODO more intelligent retry mechanism?
                 Delay = randoms:rand_uniform(0, 30),
@@ -310,6 +326,7 @@ on({read, eventual, {query_reply, ReqId, QueryResult}}, State) ->
                 %% have processed them)
                 ok;
             Entry ->
+                trace_mpath:log_info(self(), {read_eventual_done}),
                 % eventual consistent writes just write on a single replica
                 % and expect the update to eventual spread through gossiping
                 % or similiar behaviour
@@ -342,6 +359,8 @@ on({write, strong, {update_reply, ReqId, CVal}}, State) ->
             Entry ->
                 Msg = {crdt_acceptor, merge, '_', This, ReqId, key,
                        entry_datatype(Entry), CVal},
+                trace_mpath:log_info(self(), {write_strong_start,
+                                             value, CVal}),
                 send_to_all_replicas(entry_key(Entry), Msg)
         end,
     State;
@@ -358,6 +377,7 @@ on({write, strong, {merge_reply, ReqId, done}}, State) ->
                 case Done of
                     false -> save_entry(NewEntry, tablename(State));
                     true ->
+                        trace_mpath:log_info(self(), {write_strong_done}),
                         inform_client(write_done, Entry),
                         delete_entry(Entry, tablename(State))
                 end
@@ -384,32 +404,47 @@ on({write, eventual, {update_reply, ReqId, _CVal}}, State) ->
                 %% have processed them)
                 ok;
             Entry ->
+                trace_mpath:log_info(self(), {write_eventual_done}),
                 % eventual consistent writes just write on a single replica
                 % and expect the update to eventual spread through gossiping
                 % or similiar behaviour
                 inform_client(write_done, Entry),
                 delete_entry(Entry, tablename(State))
         end,
+    State;
+
+on({local_range_req, Key, Client, Message, {get_state_response, LocalRange}}, State) ->
+    Keys = replication:get_keys(Key),
+
+    LocalKeys = lists:filter(fun(K) -> intervals:in(K, LocalRange) end, Keys),
+
+    K = case LocalKeys of
+        [] ->
+            ?TRACE("cannot send locally ~p ~p ", [Keys, LocalRange]),
+            %% the local dht node is not responsible for any replca... route to
+            %% random replica
+            Hash = ?RT:hash_key(term_to_binary(Client)),
+            Idx = (Hash rem length(Keys)) + 1,
+            lists:nth(Idx, Keys);
+        [H|_] ->
+            %% use replica managed by local dht node
+            H
+        end,
+
+    Dest = pid_groups:find_a(routing_table),
+    LookupEnvelope = dht_node_lookup:envelope(3, setelement(6, Message, K)),
+    comm:send_local(Dest, {?lookup_aux, K, 0, LookupEnvelope}),
     State.
 
 %%%%%% internal helper
 
 -spec send_to_local_replica(?RT:key(), comm:erl_local_pid(), tuple()) -> ok.
 send_to_local_replica(Key, Client, Message) ->
-    %% TODO really ugly hack, only ensures that the same client gets the same
-    %% replica key every time, but does not care about locality
     %% assert element(3, message) =:= '_'
     %% assert element(6, message) =:= key
-    Dest = pid_groups:find_a(routing_table),
-
-    Hash = ?RT:hash_key(term_to_binary(Client)),
-    Keys = replication:get_keys(Key),
-    Idx = (Hash rem length(Keys)) + 1,
-    K = lists:nth(Idx, Keys),
-
-    LookupEnvelope = dht_node_lookup:envelope(3, setelement(6, Message, K)),
-    comm:send_local(Dest, {?lookup_aux, K, 0, LookupEnvelope}),
-    ok.
+    LocalDhtNode = pid_groups:get_my(dht_node),
+    This = comm:reply_as(comm:this(), 5, {local_range_req, Key, Client, Message, '_'}),
+    comm:send_local(LocalDhtNode, {get_state, This, my_range}).
 
 -spec send_to_all_replicas(?RT:key(), tuple()) -> ok.
 send_to_all_replicas(Key, Message) ->
@@ -432,7 +467,7 @@ inform_client(write_done, Entry) ->
 inform_client(read_done, Entry, QueryResult) ->
     Client = entry_client(Entry),
     case is_tuple(Client) of
-        true -> 
+        true ->
             % must unpack envelope
             comm:send(entry_client(Entry), {read_done, QueryResult});
         false ->
@@ -530,15 +565,15 @@ entry_replies(Entry)              -> element(6, Entry).
 -spec entry_set_replies(entry(), replies()) -> entry().
 entry_set_replies(Entry, Replies) -> setelement(6, Entry, Replies).
 
--spec get_entry(any(), ?PDB:tableid()) -> entry() | undefined.
+-spec get_entry(any(), ?PDB:tableid()) -> entry() | batch_entry() | undefined.
 get_entry(ReqId, TableName) ->
     ?PDB:get(ReqId, TableName).
 
--spec save_entry(entry(), ?PDB:tableid()) -> ok.
+-spec save_entry(entry() | batch_entry(), ?PDB:tableid()) -> ok.
 save_entry(NewEntry, TableName) ->
     ?PDB:set(NewEntry, TableName).
 
--spec delete_entry(entry(), ?PDB:tableid()) -> ok.
+-spec delete_entry(entry() | batch_entry(), ?PDB:tableid()) -> ok.
 delete_entry(Entry, TableName) ->
     ReqId = entry_reqid(Entry),
     ?PDB:delete(ReqId, TableName).
@@ -558,3 +593,8 @@ round_inc(Round, ID) ->
 next_read_batching_interval() ->
     Div = randoms:rand_uniform(0, ?READ_BATCHING_INTERVAL_DIVERGENCE*2 + 1),
     ?READ_BATCHING_INTERVAL - ?READ_BATCHING_INTERVAL_DIVERGENCE + Div.
+
+%% @doc Checks whether config parameters exist and are valid.
+-spec check_config() -> boolean().
+check_config() ->
+    config:cfg_is_bool(read_batching).

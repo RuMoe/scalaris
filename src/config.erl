@@ -164,6 +164,7 @@ check_config() ->
           end || X  <- [ fun log:check_config/0,
                          fun sup_scalaris:check_config/0,
                          fun sup_dht_node_core:check_config/0,
+                         fun proto_sched:check_config/0,
                          fun acceptor:check_config/0,
                          fun learner:check_config/0,
                          fun rdht_tx:check_config/0,
@@ -206,6 +207,7 @@ check_config() ->
                          fun l_on_cseq:check_config/0,
                          fun prbr:check_config/0,
                          fun rbrcseq:check_config/0,
+                         fun crdt_proposer:check_config/0,
                          fun db_bitcask_merge_extension:check_config/0
                        ]],
     lists:foldl(fun(A,B) -> A and B end, true, Checks).
