@@ -20,6 +20,10 @@
 -author('schintke@zib.de').
 -vsn('$Id:$ ').
 
+%% req_for_retrigger can handle incdelay or noincdelay for retriggering
+%% requests. noincdelay is not used right now, but throwing away logic seems premature
+-dialyzer({no_match, req_for_retrigger/2}).
+
 %%-define(PDB, pdb_ets).
 -define(PDB, pdb).
 -define(REDUNDANCY, (config:read(redundancy_module))).
@@ -727,7 +731,7 @@ on({qread_initiate_write_through, RoundTried, ReadEntry}, State) ->
                                     4,
                                     {prbr, write, DB, '_', Collector, K,
                                      entry_datatype(ReadEntry), MyId, WriteRound,
-                                     pr:new(0,0), %% has no effect because write_through
+                                     pr:set_wti(RoundTried, PreviousWTI),
                                      V, WTUI, WTWF, _IsWriteThrough = true}),
                             comm:send_local(Dest, {?lookup_aux, K, 0, LookupEnvelope})
                           end
@@ -793,58 +797,51 @@ on({qread_write_through_collect, ReqId,
         _ ->
             ?TRACE("rbrcseq:on qread_write_through_collect deny Client: ~p~n", [entry_client(Entry)]),
             Replies = entry_replies(Entry),
-            {Done, NewReplies} = add_write_deny(Replies, RoundTried, Cons),
-            NewEntry = entry_set_replies(Entry, NewReplies),
+            {_Done=true, _NewReplies} = add_write_deny(Replies, RoundTried, Cons),
 
-            case Done of
-                false ->
-                    update_entry(NewEntry, tablename(State)),
-                    State;
-                true ->
-                    %% retry original read
-                    delete_entry(Entry, TableName),
+            %% the first deny we receive requires us to retry the request
+            delete_entry(Entry, TableName),
 
-                    %% we want to retry with the read, the original
-                    %% request is packed in the client field of the
-                    %% entry as we created a reply_as with
-                    %% qread_write_through_done The 2nd field of the
-                    %% reply_as was filled with the original state
-                    %% entry (including the original client and the
-                    %% original read filter.
-                    {_Pid, Msg1} = comm:unpack_cookie(entry_client(Entry), {whatever}),
-                    %% reply_as from qread write through without filtering
-                    qread_write_through_done = comm:get_msg_tag(Msg1),
-                    UnpackedEntry = element(2, Msg1),
-                    UnpackedClient = entry_client(UnpackedEntry),
+            %% we want to retry with the read, the original
+            %% request is packed in the client field of the
+            %% entry as we created a reply_as with
+            %% qread_write_through_done The 2nd field of the
+            %% reply_as was filled with the original state
+            %% entry (including the original client and the
+            %% original read filter.
+            {_Pid, Msg1} = comm:unpack_cookie(entry_client(Entry), {whatever}),
+            %% reply_as from qread write through without filtering
+            qread_write_through_done = comm:get_msg_tag(Msg1),
+            UnpackedEntry = element(2, Msg1),
+            UnpackedClient = entry_client(UnpackedEntry),
 
-                    %% In case of filters enabled, we packed once more
-                    %% to write through without filters and applying
-                    %% the filters afterwards. Let's check this by
-                    %% unpacking and seeing whether the reply msg tag
-                    %% is still a qread_write_through_done. Then we
-                    %% have to use the 2nd unpacking to get the
-                    %% original client entry.
-                    {_Pid2, Msg2} = comm:unpack_cookie(
-                                      UnpackedClient, {whatever2}),
+            %% In case of filters enabled, we packed once more
+            %% to write through without filters and applying
+            %% the filters afterwards. Let's check this by
+            %% unpacking and seeing whether the reply msg tag
+            %% is still a qread_write_through_done. Then we
+            %% have to use the 2nd unpacking to get the
+            %% original client entry.
+            {_Pid2, Msg2} = comm:unpack_cookie(
+                              UnpackedClient, {whatever2}),
 
-                    {Client, Filter} =
-                        case comm:get_msg_tag(Msg2) of
-                            qread_write_through_done ->
-                                %% we also have to delete this request
-                                %% as no one will answer it.
-                                UnpackedEntry2 = element(2, Msg2),
-                                delete_entry(UnpackedEntry2, TableName),
-                                {entry_client(UnpackedEntry2),
-                                 entry_filters(UnpackedEntry2)};
-                            _ ->
-                                {UnpackedClient,
-                                 entry_filters(UnpackedEntry)}
-                        end,
-                    NextRound = 1 + pr:get_r(RoundTried),
-                    gen_component:post_op({qread, Client, entry_openreqentry(Entry), Key, entry_datatype(Entry),
-                                           Filter, entry_retrigger(Entry) - entry_period(Entry), NextRound, write},
-                      State)
-            end
+            {Client, Filter} =
+                case comm:get_msg_tag(Msg2) of
+                    qread_write_through_done ->
+                        %% we also have to delete this request
+                        %% as no one will answer it.
+                        UnpackedEntry2 = element(2, Msg2),
+                        delete_entry(UnpackedEntry2, TableName),
+                        {entry_client(UnpackedEntry2),
+                         entry_filters(UnpackedEntry2)};
+                    _ ->
+                        {UnpackedClient,
+                         entry_filters(UnpackedEntry)}
+                end,
+            NextRound = 1 + pr:get_r(RoundTried),
+            gen_component:post_op({qread, Client, entry_openreqentry(Entry), Key, entry_datatype(Entry),
+                                   Filter, entry_retrigger(Entry) - entry_period(Entry), NextRound, write},
+              State)
     end;
 
 on({qread_write_through_done, ReadEntry, _Filtering,
@@ -900,6 +897,10 @@ on({qread_write_through_done, ReadEntry, Filtering,
 
 %% normal qwrite step 1: preparation and starting read-phase
 on({qwrite, Client, OpenReqEntry, Key, DataType, Filters, WriteValue, RetriggerAfter}, State) ->
+    gen_component:post_op({qwrite, Client, OpenReqEntry, Key, DataType,
+                           Filters, WriteValue, RetriggerAfter, incremental}, State);
+
+on({qwrite, Client, OpenReqEntry, Key, DataType, Filters, WriteValue, RetriggerAfter, RoundToTry}, State) ->
     ?TRACE("rbrcseq:on qwrite~n", []),
     %% assign new reqest-id
     ReqId = uid:get_pids_uid(),
@@ -912,8 +913,14 @@ on({qwrite, Client, OpenReqEntry, Key, DataType, Filters, WriteValue, RetriggerA
     This = comm:reply_as(self(), 3, {qwrite_read_done, ReqId, '_'}),
     case save_entry(Entry, tablename(State)) of
         ok ->
-            gen_component:post_op({qround_request, This, OpenReqEntry, Key, DataType,
-                                 element(1, Filters), write, _RetriggerAfter = 1}, State);
+            case RoundToTry of
+                incremental ->
+                    gen_component:post_op({qround_request, This, OpenReqEntry, Key, DataType,
+                        element(1, Filters), write, _RetriggerAfter = 1}, State);
+                _ ->
+                    gen_component:post_op({qread, This, OpenReqEntry, Key, DataType,
+                        element(1, Filters), _RetriggerAfter = 1, RoundToTry, write}, State)
+            end;
         error ->
             %% client has already received reply
             State
@@ -921,10 +928,29 @@ on({qwrite, Client, OpenReqEntry, Key, DataType, Filters, WriteValue, RetriggerA
 
 %% qwrite step 2: qread is done, we trigger a quorum write in the given Round
 on({qwrite_read_done, ReqId,
-    {qread_done, _ReadId, Round, OldWriteRound, ReadValue}},
-   State) ->
+    {qread_done, _ReadId, Round, OldWriteRound, ReadValue}}, State) ->
     ?TRACE("rbrcseq:on qwrite_read_done qread_done~n", []),
-    gen_component:post_op({do_qwrite_fast, ReqId, Round, OldWriteRound, ReadValue}, State);
+
+    NewState = gen_component:post_op({do_qwrite_fast, ReqId, Round, OldWriteRound, ReadValue}, State),
+    %% check if we should send a learned message to ourselves before executing phase 2
+    %% to prevent applying the same update twice
+    case pr:get_wti(OldWriteRound) of
+        {PrevReturn, PrevProposer} ->
+            case element(1, PrevProposer)  =:= comm:this() of
+                true ->
+                    %% the previous update in the sequence was done by the same proposer -> send learned
+                    %% msg to ourselves to be safe
+                    Msg = element(4, PrevProposer),
+                    NewMsg = setelement(3, Msg,
+                                         {learned_reply, OldWriteRound, Round, PrevReturn}),
+                    gen_component:post_op(NewMsg, NewState);
+                false ->
+                    NewState
+            end;
+        _ ->
+            %% first write in this sequence
+            NewState
+    end;
 
 on({qwrite_fast, Client, OpenReqEntry, Key, DataType, Filters = {_RF, _CC, _WF},
     WriteValue, RetriggerAfter, Round, OldWriteRound, ReadFilterResultValue}, State) ->
@@ -1113,18 +1139,28 @@ on({qwrite_collect, ReqId,
                     NewEntry2 = entry_set_optype(NewEntry, denied_write),
                     NewEntry3 = entry_disable_retrigger(NewEntry2),
                     update_entry(NewEntry3, TableName),
+
+                    NextMsg = {qwrite,
+                               entry_client(Entry),
+                               entry_openreqentry(Entry),
+                               entry_key(Entry),
+                               entry_datatype(Entry),
+                               entry_filters(Entry),
+                               entry_write_val(Entry),
+                               entry_retrigger(NewEntry),
+                               % round to retry in... + 2 to account for incremented
+                               % read round prepared for fast writes
+                               2 + pr:get_r(Replies#w_replies.highest_write_round)
+                              },
+
                     case randoms:rand_uniform(1, UpperLimit) of
                         1 ->
-                            NewReq = req_for_retrigger(NewEntry, noincdelay),
-                            gen_component:post_op(NewReq, State);
+                            %% retry read immediately
+                            gen_component:post_op(NextMsg, State);
                         2 ->
-                            NewReq = req_for_retrigger(NewEntry, noincdelay),
-                            %% TODO: maybe record number of retries
-                            %% and make timespan chosen from
-                            %% dynamically wider
-                            _ = comm:send_local_after(
-                                  10 + randoms:rand_uniform(1,90), self(),
-                                  NewReq),
+                            %% delay before retry
+                            Delay = 15 + randoms:rand_uniform(1, 10),
+                            comm:send_local_after(Delay, self(), NextMsg),
                             State
                     end
             end
@@ -1146,6 +1182,27 @@ on({qwrite_collect, ReqId,
     %% drop replies for unknown requests, as they must be outdated
     %% as all initiations run through the same process.
     ;
+
+on({qwrite_collect, ReqId,
+    {learned_reply, Round, NextRound, WriteRet}}, State) ->
+    %% receiving this message means that the request was definitely completed
+    Entry = get_entry(ReqId, tablename(State)),
+    _ = case Entry of
+        undefined ->
+            %% drop replies for unknown requests, as they must be
+            %% outdated as all replies run through the same process.
+            State;
+        _ ->
+            Replies = entry_replies(Entry),
+            {_, NewReplies, _} = add_write_reply(Replies, Round, true),
+            NewEntry = entry_set_replies(Entry, NewReplies),
+            ReplyEntry = entry_set_my_round(NewEntry, NextRound),
+            inform_client(qwrite_done, ReplyEntry, WriteRet),
+
+            delete_all_entries(entry_openreqentry(NewEntry),
+                                tablename(State), _DeleteReqEntryToo=false)
+    end,
+    State;
 
 %% periodically scan the local states for long lasting entries and
 %% retrigger them
@@ -1605,7 +1662,10 @@ add_write_deny(Replies, RoundTried, _Cons) ->
                 NewDenyCount = R1#w_replies.deny_count + 1,
                 R1#w_replies{deny_count=NewDenyCount}
         end,
-    Done = ?REDUNDANCY:quorum_denied(R2#w_replies.deny_count),
+
+    % even one deny requires us to retry. otherwise we risk waiting forever
+    % if one acceptor has failed
+    Done = true,
     {Done, R2}.
 
 -spec is_read_commuting(prbr:read_filter(), prbr:write_filter(), module()) -> boolean().

@@ -1,4 +1,4 @@
-% @copyright 2013-2016 Zuse Institute Berlin,
+% @copyright 2013-2018 Zuse Institute Berlin,
 
 %   Licensed under the Apache License, Version 2.0 (the "License");
 %   you may not use this file except in compliance with the License.
@@ -75,21 +75,25 @@ start() ->
       case mnesia:create_schema([node()]) of
         ok -> ok;
         Msg ->
+              VMName = case config:read(vmname) of
+                           failed -> atom_to_list(novmname);
+                           X -> atom_to_list(X)
+                       end,
               case util:is_unittest() of
                   true ->
-                      ct:pal("starting mnesia: ~w~n", [Msg]),
+                      ct:pal("starting mnesia: ~p~n", [Msg]),
                       ct:pal("starting mnesia: maybe you tried to start a new node "
                              "while we still found persisted data of a node with the "
                              "same name. If you want to get rid of the old persisted "
                              "data, delete them using ~p.~n",
-                             ["rm -rf data/" ++ atom_to_list(node())]);
+                             ["rm -rf data/" ++ VMName ++ "/" ++ atom_to_list(node())]);
                   false ->
-                      io:format("starting mnesia: ~w~n", [Msg]),
+                      io:format("starting mnesia: ~p~n", [Msg]),
                       io:format("starting mnesia: maybe you tried to start a new node "
                                 "while we still found persisted data of a node with the "
                                 "same name. If you want to get rid of the old persisted "
                                 "data, delete them using ~p.~n",
-                                ["rm -rf data/" ++ atom_to_list(node())])
+                                ["rm -rf data/" ++ VMName ++ "/" ++ atom_to_list(node())])
               end,
               erlang:halt()
       end

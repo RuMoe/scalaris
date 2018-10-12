@@ -76,7 +76,6 @@ usage(){
     echo "    -e <params> - pass additional parameters to erl"
     echo "    -n <name>   - Erlang process name (starts distributed Erlang required for Java API)"
     echo "    -c <cookie> - Erlang cookie to use (for distributed Erlang)"
-    echo "                  (default '`get_cookie`')"
     echo "    -p <port>   - TCP port for the Scalaris node"
     echo "    -y <port>   - TCP port for the built-in webserver (YAWS)"
     echo "    -k <key>    - join at the given key"
@@ -88,7 +87,7 @@ usage(){
     echo "                - (single) port distributed erlang listens on"
     echo "    --nodes-per-vm <number>"
     echo "                - number of Scalaris nodes to start inside the VM"
-    echo "    -t <stype>  - select start type: first|joining|quorum|recover|nostart|first_nostart"
+    echo "    -t <stype>  - select start type: first|joining|quorum|recover|nostart|first_nostart|client"
     echo "    -m          - start global Scalaris management server"
     echo "    -s <file>   - use the given file name as the scalaris.local.cfg"
     echo " <cmd>:"
@@ -167,7 +166,6 @@ get_sys_hostname() {
 fix_node_name() {
     # if the given node name includes an '@', leave untouched
     if [ "" != "$NODE_NAME" ]; then
-        echo here i am
         if ! echo $NODE_NAME | grep "@" >/dev/null ; then
             NODE_NAME="$NODE_NAME@`get_hostname`"
         fi
@@ -187,18 +185,24 @@ get_cookie() {
         . "$HOME/.scalaris/scalarisctl.conf"
       fi
     fi
-    echo -n ${cookie:-"chocolate chip cookie"}
+    echo -n ${cookie:-""}
 }
 
 cleanup_before_checkinstallation() {
-  for pid in `ps aux | grep beam.smp | grep $NODE_NAME | awk '{print $2}'`;
-  do
-    #echo "Killing $pid..."
-    kill $pid
-  done
+  if [ "" != "$NODE_NAME" ]; then
+    for pid in `ps aux | grep beam.smp | grep $NODE_NAME | awk '{print $2}'`;
+    do
+      #echo "Killing $pid..."
+      kill $pid
+    done
+  fi
 }
 
 checkinstallation() {
+    if [ "" = "$NODE_NAME" ]; then
+        NODE_NAME=`cat /dev/urandom | env LC_CTYPE=C tr -dc 'a-z' | fold -w 8 | head -n 1`
+        fix_node_name
+    fi
     echo "Running cleanup..."
     cleanup_before_checkinstallation
     echo -n "Running basic tests..."
@@ -255,7 +259,7 @@ checkinstallation() {
         echo "ERROR: erl could not create a Erlang VM named 'checkinstallation@`get_hostname`'"
         echo "Are you already running another checkinstallation?"
         echo "'scalarisctl list' gives you a list of currently registered Erlang VMs"
-        echo "We were trying to run: erl -noinput -name \"checkinstallation@`get_hostname`\" -eval 'halt(0).'"
+        echo "We were trying to run: erl -noinput -name \"checkinstallation$NODE_NAME@`get_hostname`\" -eval 'halt(0).'"
         echo -n "Continuing basic tests..."
     fi
 
@@ -424,14 +428,15 @@ checkinstallation() {
     if [ -n "$port" ]; then
         export SCALARIS_ADDITIONAL_PARAMETERS="-scalaris mgmt_server {{127,0,0,1},$port,mgmt_server} -scalaris known_hosts [{{127,0,0,1},$port,service_per_vm}]"
     fi
+
     export SCALARIS_JAPI_NODE="$NODE_NAME"
-    $0 -c "$SCALARIS_COOKIE" -e "$erl_flags" -d -t first -m -n "$NODE_NAME" -p "$port" -y "$yaws_port" start > /dev/null 2>&1
+    $0 -e "$erl_flags" -c "chocolate chip cookie" -d -t first -m -n "$NODE_NAME" -p "$port" -y "$yaws_port" start > /dev/null 2>&1
     FAILED=$?
     if [ $FAILED -ne 0 ]; then
         echo -e "  Starting Scalaris \x1b[1;31mFAILED\x1b[0m"
-        echo "  we were trying to run: $0 -t nostart -m -d start"
+        echo "  we were trying to run: $0 -d -t first -m start"
         # try to stop anyway (it could have been a false alarm):
-        $0 -c "$SCALARIS_COOKIE" -e "$erl_flags" -d -t first -m -n "$NODE_NAME" -p "$port" -y "$yaws_port" stop > /dev/null 2>&1
+        $0 -e "$erl_flags" -c "chocolate chip cookie" -d -t first -m -n "$NODE_NAME" -p "$port" -y "$yaws_port" stop > /dev/null 2>&1
         exit 1
     fi
 
@@ -456,7 +461,7 @@ checkinstallation() {
         echo "  (result: ${scalaris_nodes_count_actual})."
         echo "  we were trying to run: $0 -t first -m -d start"
         # try to stop anyway (it could have been a false alarm):
-        $0 -c "$SCALARIS_COOKIE" -e "$erl_flags" -d -t first -m -n "$NODE_NAME" -p "$port" -y "$yaws_port" stop > /dev/null 2>&1
+        $0 -e "$erl_flags" -c "chocolate chip cookie" -d -t first -m -n "$NODE_NAME" -p "$port" -y "$yaws_port" stop > /dev/null 2>&1
         exit 1
       fi
     done
@@ -665,7 +670,7 @@ checkinstallation() {
         echo "$CPP_OUTPUT"
     fi
 
-    $0 -c "$SCALARIS_COOKIE" -e "$erl_flags" -d -f -m -n "$NODE_NAME" -p "$port" -y "$yaws_port" stop > /dev/null 2>&1
+    $0 -e "$erl_flags" -c "chocolate chip cookie" -d -f -m -n "$NODE_NAME" -p "$port" -y "$yaws_port" stop > /dev/null 2>&1
 
     if [ "$JAVA_FAILED" -ne 0 -o "$PYTHON_FAILED" -ne 0 \
          -o "$PYTHON3_FAILED" -ne 0 -o "$RUBY_FAILED" -ne 0 -o "$CPP_FAILED" -ne 0 ]; then
@@ -701,7 +706,9 @@ scalarisstart(){
         BACKGROUND="-detached"
     fi
     local tmp
+    local COOKIE
     tmp=""
+    COOKIE=""
     if [ "$start_type" != "" ]; then
         tmp="$tmp -scalaris start_type $start_type"
     else
@@ -735,13 +742,15 @@ scalarisstart(){
     if [ -n "$NODES_PER_VM" ]; then
         tmp="$tmp -scalaris nodes_per_vm \"$NODES_PER_VM\""
     fi
+    if [ "$SCALARIS_COOKIE" != "" ]; then
+        COOKIE="-setcookie '$SCALARIS_COOKIE'"
+    fi
     SCALARIS_ADDITIONAL_PARAMETERS="$SCALARIS_ADDITIONAL_PARAMETERS $tmp"
     # if YAWSHOME is not the logdir, make sure to create the directory!
     export YAWSHOME="$LOGDIR/$NODE_NAME"
     mkdir -p "$LOGDIR/$NODE_NAME"
     pushd $BEAMDIR > /dev/null
-    START_CMD="\"$ERL\" -setcookie \"$SCALARIS_COOKIE\"\
- -pa $SCALARISDIR/contrib/yaws/ebin\
+    START_CMD="\"$ERL\" -pa $SCALARISDIR/contrib/yaws/ebin\
  -pa $SCALARISDIR/contrib/log4erl/ebin\
  -pa $SCALARISDIR/contrib/dotto/ebin\
  -pa $BEAMDIR $ERLANG_ADDITIONAL_FLAGS $BACKGROUND\
@@ -753,6 +762,7 @@ scalarisstart(){
  -scalaris local_config \"\\\"$ETCDIR/$SCALARIS_LOCAL_CFG\\\"\"\
  -connect_all false -hidden $DISTRERL\
  $SCALARIS_ADDITIONAL_PARAMETERS\
+ $COOKIE\
  -s scalaris `echo $erl_flags`"
     if [ $daemonize -ne 0 -a $DAEMONIZE_SCREEN -ne 0 ]; then
         if [ -n "$SLURM_JOBID" ]; then
@@ -774,25 +784,45 @@ scalarisstart(){
 }
 
 scalarisstop(){
+    FAILED=
     pushd $BEAMDIR > /dev/null
-    $ERL -setcookie "$SCALARIS_COOKIE" \
+    if [ "$SCALARIS_COOKIE" != "" ]; then
+      $ERL -setcookie "$SCALARIS_COOKIE"\
         -name "ctl_$RANDOM@`get_hostname`" \
         -pa $BEAMDIR \
         -noinput \
         -s scalaris cli -extra $NODE_NAME stop
-    FAILED=$?
+      FAILED=$?
+    else
+      $ERL \
+        -name "ctl_$RANDOM@`get_hostname`" \
+        -pa $BEAMDIR \
+        -noinput \
+        -s scalaris cli -extra $NODE_NAME stop
+      FAILED=$?
+    fi
     popd > /dev/null 2>&1 || true
     return $FAILED
 }
 
 scalariscall(){
+    FAILED=
     pushd $BEAMDIR > /dev/null
-    $ERL -setcookie "$SCALARIS_COOKIE" \
+    if [ "$SCALARIS_COOKIE" != "" ]; then
+      $ERL -setcookie "$SCALARIS_COOKIE" \
         -name "ctl_$RANDOM@`get_hostname`" \
         -pa $BEAMDIR \
         -noinput \
         -eval "$1"
-    FAILED=$?
+      FAILED=$?
+    else
+      $ERL \
+        -name "ctl_$RANDOM@`get_hostname`" \
+        -pa $BEAMDIR \
+        -noinput \
+        -eval "$1"
+      FAILED=$?
+    fi
     popd > /dev/null 2>&1 || true
     return $FAILED
 }
@@ -910,6 +940,7 @@ fix_node_name
 
 case $cmd in
     checkinstallation)
+        SCALARIS_COOKIE="chocolate chip cookie" # java hack
         checkinstallation;;
     start)
         scalarisstart;;

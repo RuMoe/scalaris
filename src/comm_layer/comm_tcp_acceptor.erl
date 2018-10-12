@@ -1,4 +1,4 @@
-% @copyright 2008-2017 Zuse Institute Berlin
+% @copyright 2008-2018 Zuse Institute Berlin
 
 %   Licensed under the Apache License, Version 2.0 (the "License");
 %   you may not use this file except in compliance with the License.
@@ -25,6 +25,7 @@
 -export([start_link/1, init/2, check_config/0]).
 
 -include("gen_component.hrl").
+-include("scalaris.hrl").
 
 -spec start_link(pid_groups:groupname()) -> {ok, pid()}.
 start_link(GroupName) ->
@@ -58,9 +59,9 @@ init(Supervisor, GroupName) ->
             % If init throws up, send 'started' to the supervisor but exit.
             % The supervisor will try to restart the process as it is watching
             % this PID.
-            Level:Reason ->
+            ?CATCH_CLAUSE_WITH_STACKTRACE(Level, Reason, Stacktrace)
                 log:log(error,"Error: exception ~p:~p in ~p:init/2:  ~.0p",
-                        [Level, Reason, ?MODULE, erlang:get_stacktrace()]),
+                        [Level, Reason, ?MODULE, Stacktrace]),
                 erlang:Level(Reason)
         after
             Supervisor ! {started, self()}

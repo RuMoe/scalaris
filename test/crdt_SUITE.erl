@@ -78,7 +78,7 @@ init_per_testcase(_TestCase, Config) ->
             false -> false;
             {batching, Enabled} -> Enabled
         end,
-    Size = randoms:rand_uniform(1, 25),
+    Size = randoms:rand_uniform(5, 6),
 
     unittest_helper:make_ring(Size, [{config, [{log_path, PrivDir},
                                                {ordered_links, false},
@@ -98,15 +98,15 @@ crdt_gcounter_inc(_Config) ->
     Key = randoms:getRandomString(),
     UnitTestPid = self(),
 
-    Parallel = randoms:rand_uniform(1, 50),
-    Count = 10000 div Parallel,
+    Parallel = randoms:rand_uniform(5, 10),
+    Count = 10 div Parallel,
     WriteFun = fun(_I) -> ok = gcounter_on_cseq:inc(Key) end,
     _ = spawn_writers(UnitTestPid, Parallel, Count, WriteFun),
     wait_writers_completion(Parallel),
 
     {ok, Result} = gcounter_on_cseq:read(Key),
     ct:pal("gcounter state is: ~p", [gcounter_on_cseq:read_state(Key)]),
-    ct:pal("Planned ~p increments, done ~p - discrepancy is NOT ok~n", [Count*Parallel, Result]),
+    ct:pal("Planned ~p increments, done ~p~n", [Count*Parallel, Result]),
     ?equals(Count*Parallel, Result),
     ok.
 
@@ -127,28 +127,27 @@ crdt_pncounter_banking(_Config) ->
 
     %% spawn worker
     Parallel = randoms:rand_uniform(1, 50),
-    Count = 10000 div Parallel,
+    Count = 1000 div Parallel,
     WriteFun =  fun(_I) ->
                     TransactAmount = randoms:rand_uniform(1, StartMoney),
-                    From = lists:nth(randoms:rand_uniform(1, AccountNum), Accounts),
-                    To = lists:nth(randoms:rand_uniform(1, AccountNum), Accounts),
+                    From = lists:nth(randoms:rand_uniform(1, AccountNum+1), Accounts),
+                    To = lists:nth(randoms:rand_uniform(1, AccountNum+1), Accounts),
                     %% allows From =:= To, but shouldn't be a problem
                     ok = pncounter_on_cseq:subtract(From, TransactAmount),
                     ok = pncounter_on_cseq:add(To, TransactAmount)
                 end,
     _ = spawn_writers(UnitTestPid, Parallel, Count, WriteFun),
     wait_writers_completion(Parallel),
-
     %% check if nothing is lost or gained
     Balances = [begin
                     {ok, Money} = pncounter_on_cseq:read(Account),
                     Money
                 end || Account <- Accounts],
     EndMoney = lists:sum(Balances),
-    ct:pal("Start balance: ~p~nEnd balance: ~p~ndiscrepancy is NOT ok!~n",
+    ct:pal("The individual account balances are: ~n~p", [Balances]),
+    ct:pal("Start balance: ~p~nEnd balance: ~p~n",
            [TotalMoney, EndMoney]),
     ?equals(TotalMoney, EndMoney),
-    ct:pal("The individual account balances are: ~n~p", [Balances]),
     ok.
 
 crdt_gcounter_read_your_write(_Config) ->
@@ -158,7 +157,7 @@ crdt_gcounter_read_your_write(_Config) ->
     UnitTestPid = self(),
 
     %% Start writer
-    Parallel = randoms:rand_uniform(1, 50),
+    Parallel = randoms:rand_uniform(20, 21),
     Count = 1000 div Parallel,
     WriteFun = fun (_) ->
                     %% note: by desing, when mixing a strong read with a eventual write
@@ -203,7 +202,7 @@ crdt_gcounter_read_monotonic(_Config) ->
 
     %% Start writer
     Parallel = randoms:rand_uniform(1, 50),
-    Count = 10000 div Parallel,
+    Count = 1000 div Parallel,
     WriteFun = fun
                     (I) when I div 2 == 0 -> ok = gcounter_on_cseq:inc(Key);
                     (_)                   -> ok = gcounter_on_cseq:inc_eventual(Key)
@@ -254,7 +253,7 @@ crdt_gcounter_read_monotonic2(_Config) ->
 
     %% do all the writes
     Parallel = randoms:rand_uniform(1, 50),
-    Count = 10000 div Parallel,
+    Count = 1000 div Parallel,
     WriteFun = fun
                     (I) when I div 2 == 0 -> ok = gcounter_on_cseq:inc(Key);
                     (_)                   -> ok = gcounter_on_cseq:inc_eventual(Key)
@@ -288,7 +287,7 @@ crdt_gcounter_concurrent_read_monotonic(_Config) ->
 
     %% Start writer
     Parallel = randoms:rand_uniform(1, 50),
-    Count = 10000 div Parallel,
+    Count = 1000 div Parallel,
     WriteFun = fun
                     (I) when I div 2 == 0 -> ok = gcounter_on_cseq:inc(Key);
                     (_)                   -> ok = gcounter_on_cseq:inc_eventual(Key)
@@ -330,7 +329,7 @@ crdt_gcounter_ordered_concurrent_read(_Config) ->
 
     %% Start writers
     WriterCount = randoms:rand_uniform(1, 20),
-    Count = 5000 div WriterCount,
+    Count = 500 div WriterCount,
     WriteFun = fun
                     (I) when I div 2 == 0 -> ok = gcounter_on_cseq:inc(Key);
                     (_)                   -> ok = gcounter_on_cseq:inc_eventual(Key)
@@ -384,7 +383,7 @@ crdt_proto_sched_write(_Config) ->
 
     {ok, Result} = gcounter_on_cseq:read(Key),
     ct:pal("gcounter state is: ~p", [gcounter_on_cseq:read_state(Key)]),
-    ct:pal("Planned ~p increments, done ~p - discrepancy is NOT ok~n", [Count*Parallel, Result]),
+    ct:pal("Planned ~p increments, done ~p~n", [Count*Parallel, Result]),
     ?equals(Count*Parallel, Result),
 
     ok.
@@ -532,7 +531,7 @@ crdt_proto_sched_read_your_write(_Config) ->
     ok.
 
 tester_type_check_crdt(_Config) ->
-    Count = 10,
+    Count = 100,
     config:write(no_print_ring_data, true),
 
     tester:register_value_creator({typedef, crdt, update_fun, []},
@@ -543,6 +542,8 @@ tester_type_check_crdt(_Config) ->
                                   gcounter, new, 0),
     tester:register_value_creator({typedef, pncounter, crdt, []},
                                   pncounter, new, 0),
+    tester:register_value_creator({typedef, gset, crdt, []},
+                                  gset, new, 0),
 
     %% [{modulename, [excludelist = {fun, arity}]}]
     Modules =
@@ -559,11 +560,11 @@ tester_type_check_crdt(_Config) ->
             {write_eventual, 5}       % needs fun as input
            ],
            [
-            {add_vote_reply, 1},        % TODO? prevent generating records with undefined fields
-            {add_write_reply, 1},       % TODO? prevent generating records with undefined fields
             {add_read_reply, 5},        % needs value matching db_type
             {send_to_all_replicas, 2},  % sends messages
+            {send_to_all_replicas, 3},  % sends messages
             {send_to_local_replica, 2}, % sends messages
+            {send_to_local_replica, 3},  % sends messages
             {start_request, 2},         % sends messages
             {inform_client, 3},         % cannot create valid envelopes
             {inform_client, 2},         % cannot create valid envelopes
@@ -594,6 +595,41 @@ tester_type_check_crdt(_Config) ->
             {msg_vote_reply, 2}         % sends messages
            ]
           },
+          {gla_proposer,
+           [
+            {start_link, 3},            % starts processes
+            {start_gen_component, 5},   % unsupported types
+            {on, 2},                    % sends messages
+            {read, 5},                  % needs fun as input
+            {read_eventual, 5},       % needs fun as input
+            {write, 5},                 % needs fun as input
+            {write_eventual, 5}       % needs fun as input
+           ],
+           [
+            {send_to_all_replicas, 2},  % sends messages
+            {send_to_all_replicas, 3},  % sends messages
+            {start_request, 2},         % sends messages
+            {inform_client, 3},         % cannot create valid envelopes
+            {inform_client, 2},         % cannot create valid envelopes
+            {get_entry, 2},             % needs valid ets:tid(),
+            {save_entry, 2}             % needs valid ets:tid(),
+           ]},
+          {gla_acceptor,
+           [
+            {init, 1},                  % needs to be in a pidgroup for db_name
+            {close, 1},                 % needs valid ets:tid()
+            {close_and_delete, 1},      % needs valid ets:tid()
+            {on, 2},                    % sends messages
+            {set_entry, 2},             % needs valid ets:tid()
+            {get_entry, 2}              % needs valid ets:tid()
+           ],
+           [
+            {msg_ack_reply, 3},          % sends messages
+            {msg_learner_ack_reply, 6},  % sends messages
+            {msg_nack_reply, 4},       % sends messages
+            {entry_proposed, 2},
+            {entry_update_proposed, 3}
+           ]},
           {gcounter,
            [
             {update_nth, 3}             % requires args in bounds
@@ -602,19 +638,15 @@ tester_type_check_crdt(_Config) ->
             {update_nth, 4}             % requires args in bounds
            ]
           },
-          {gcounter_on_cseq,
-           [],
-           [{read_helper, 3},           % cannot create funs
-            {write_helper, 3}           % cannot create funs
-           ]
-          },
           {pncounter, [],[] },
-          {gcounter_on_cseq,
-           [],
-           [{read_helper, 3},           % cannot create funs
-            {write_helper, 3}           % cannot create funs
-           ]
+          {gset,
+           [{exists,2},
+            {fold,3}
+           ],
+           []
           }
+          %% cannot test both pncounter_on_cseq and gcounter_on_cseq at the same time,
+          %% as this would cause a crash if the same key is used for both
         ],
     _ = [ tester:type_check_module(Mod, Excl, ExclPriv, Count)
           || {Mod, Excl, ExclPriv} <- Modules ],
@@ -623,6 +655,7 @@ tester_type_check_crdt(_Config) ->
     tester:unregister_value_creator({typedef, crdt, update_fun, []}),
     tester:unregister_value_creator({typedef, gcounter, crdt, []}),
     tester:unregister_value_creator({typedef, pncounter, crdt, []}),
+    tester:unregister_value_creator({typedef, gset, crdt, []}),
 
     true.
 
@@ -638,7 +671,7 @@ spawn_writers(UnitTestPid, NumberOfWriters, IterationsPerWriter, WriteFun, Proto
            [NumberOfWriters, IterationsPerWriter]),
     [spawn(
         fun() ->
-            case ProtoSchedTraceId of
+            _ = case ProtoSchedTraceId of
                 none ->
                     _ = [WriteFun(I) || I <- lists:seq(1, IterationsPerWriter)];
                 TraceId ->
@@ -663,8 +696,9 @@ wait_writers_completion(NumberOfWriter) ->
 stop_readers(Reader) when is_pid(Reader) ->
     stop_readers([Reader]);
 stop_readers(Readers) ->
-    [Reader ! {reader_done} || Reader <- Readers],
-    [receive {reader_terminated} -> ok end || _ <- Readers].
+    _ = [Reader ! {reader_done} || Reader <- Readers],
+    [receive {reader_terminated} -> ok end || _ <- Readers],
+    ok.
 
 -spec spawn_monotonic_reader(pid(), fun(() -> crdt:crdt()), fun((term(), term()) -> boolean())) -> pid().
 spawn_monotonic_reader(UnitTestPid, ReadFun, LTEQCompareFun) ->

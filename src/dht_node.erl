@@ -175,6 +175,14 @@ on({?tp_do_commit_abort_fwd, TM, TMItemId, RTLogEntry, Result, OwnProposal, Snap
     tx_tp:on_do_commit_abort_fwd(TM, TMItemId, RTLogEntry, Result, OwnProposal, SnapNumber, State);
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Caching of dht_node responsibilties (see dht_node_cache.erl)
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+on({cache_interval_lookup, Key, Client, _Cons}, State) ->
+    Interval = dht_node_state:get(State, my_range),
+    comm:send(Client, {cache_interval_lookup_reply, comm:this(), Key, Interval}),
+    State;
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Lookup (see api_dht_raw.erl and dht_node_lookup.erl)
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -225,9 +233,11 @@ on(X, State) when is_tuple(X) andalso element(1, X) =:= prbr ->
     NewRBRState = prbr:on(X, PRBRState),
     dht_node_state:set_prbr_state(State, DBKind, NewRBRState);
 
-on(X, State) when is_tuple(X) andalso element(1, X) =:= crdt_acceptor ->
+on(X, State) when is_tuple(X) andalso
+                  (element(1, X) =:= crdt_acceptor orelse element(1,X) =:= gla_acceptor) ->
+    Module = element(1, X),
     CrdtState = dht_node_state:get(State, crdt_db),
-    NewCrdtState = crdt_acceptor:on(X, CrdtState),
+    NewCrdtState = Module:on(X, CrdtState),
     dht_node_state:set_prbr_state(State, crdt_db, NewCrdtState);
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%

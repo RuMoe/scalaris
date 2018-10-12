@@ -1,4 +1,4 @@
-%  @copyright 2010-2015 Zuse Institute Berlin
+%  @copyright 2010-2018 Zuse Institute Berlin
 
 %   Licensed under the Apache License, Version 2.0 (the "License");
 %   you may not use this file except in compliance with the License.
@@ -101,7 +101,7 @@ run(Module, Func, Arity, Iterations, ParseState, Options, Thread) ->
                     lookup_type,
                     {'fun', Module,
                      FeederFun, Arity},
-                    'maybe_not_exported_or_no_spec_or...', erlang:get_stacktrace(),
+                    'maybe_not_exported_or_no_spec_or...', util:get_stacktrace(),
                     util:get_linetrace()}
             end;
         false ->
@@ -163,13 +163,13 @@ run_test_ttt(Module, Func,
                {ok, tester_value_creator:create_value({var_type, VarList, ArgType},
                                                       Size, TypeInfos)}
            catch
-               Error:{error, Reason} ->
+               ?CATCH_CLAUSE_WITH_STACKTRACE(Error, {error, Reason}, Stacktrace)
                    print_error(Reason),
                    %ct:pal("Reason: ~p~n", [Reason]),
                    {fail, {fail, no_result, no_result_type, Error, tester_value_creator,
                            create_value,
                            [ArgType, Size, typeInfos], %TypeInfos
-                           Reason, erlang:get_stacktrace(), util:get_linetrace()}}
+                           Reason, Stacktrace, util:get_linetrace()}}
            end,
     case GenArgs of
         {ok, Args} ->
@@ -187,7 +187,7 @@ run_test_ttt(Module, Func,
                                 [] ->
                                     {fail, no_result, no_result_type,
                                      type_check_failed_feeder_result_is_not_valid_input_for_fun,
-                                     Module, Func, Args, none, erlang:get_stacktrace(),
+                                     Module, Func, Args, none, util:get_stacktrace(),
                                      util:get_linetrace()};
                                 _ ->
                                     apply_args(Module, Func, tuple_to_list(FeededArgs),
@@ -218,15 +218,15 @@ apply_feeder(Module, Func, Args, ResultType, TypeInfos) ->
                  FeederFun,
                  Args,
                  consult_output_for_detailed_type_check_report,
-                 erlang:get_stacktrace(), util:get_linetrace()}
+                 util:get_stacktrace(), util:get_linetrace()}
         end
     catch
-        Error:Reason ->
+        ?CATCH_CLAUSE_WITH_STACKTRACE(Error, Reason, Stacktrace)
             ct:pal("Reason: ~p~n", [Reason]),
             {fail, no_result, no_result_type, Error, Module,
              FeederFun,
              Args,
-             Reason, erlang:get_stacktrace(), util:get_linetrace()}
+             Reason, Stacktrace, util:get_linetrace()}
     end.
 
 apply_args(Module, Func, Args, ResultType, TypeInfos, Thread) ->
@@ -245,12 +245,12 @@ apply_args(Module, Func, Args, ResultType, TypeInfos, Thread) ->
                  no_stacktrace, util:get_linetrace()}
         end
     catch
-        exit:{test_case_failed, Reason} ->
+        ?CATCH_CLAUSE_WITH_STACKTRACE(exit, {test_case_failed, Reason}, Stacktrace)
             {fail, no_result, no_result_type, test_case_failed, Module, Func,
-             Args, Reason, erlang:get_stacktrace(), util:get_linetrace()};
-        Error:Reason ->
+             Args, Reason, Stacktrace, util:get_linetrace()};
+        ?CATCH_CLAUSE_WITH_STACKTRACE(Error, Reason, Stacktrace)
             {fail, no_result, no_result_type, Error, Module, Func, Args, Reason,
-             erlang:get_stacktrace(), util:get_linetrace()}
+             Stacktrace, util:get_linetrace()}
     end.
 
 -spec run_test(module(), atom(), non_neg_integer(), non_neg_integer(),

@@ -1,4 +1,4 @@
-%  @copyright 2007-2017 Zuse Institute Berlin
+%  @copyright 2007-2018 Zuse Institute Berlin
 
 %   Licensed under the Apache License, Version 2.0 (the "License");
 %   you may not use this file except in compliance with the License.
@@ -108,6 +108,15 @@ init(Options) ->
     _ = [write(K, V) || {K, V} <- ConfigParameters],
     _ = [write(K, V) || {K, V} <- AdditionalKVs],
 
+    %% use different subdirectory per vmname to be independent of distr. Erlang
+    DBSubDir = case read(vmname) of
+                   failed -> novmname;
+                   X -> X
+               end,
+    _ = write(db_directory, read(db_directory) ++ "/"
+              ++ atom_to_list(DBSubDir) ++ "/"),
+    ok = filelib:ensure_dir(read(db_directory)),
+
     try check_config() of
         true -> ok;
         _    -> % wait so the error output can be written:
@@ -115,7 +124,7 @@ init(Options) ->
             receive nothing -> ok end
     catch Err:Reason -> % wait so the error output can be written:
             error_logger:error_msg("check_config/0 crashed with: ~.0p:~.0p~nStacktrace:~p~n",
-                                   [Err, Reason, erlang:get_stacktrace()]),
+                                   [Err, Reason, util:get_stacktrace()]),
             init:stop(1),
             receive nothing -> ok end
     end.
@@ -207,6 +216,7 @@ check_config() ->
                          fun l_on_cseq:check_config/0,
                          fun prbr:check_config/0,
                          fun rbrcseq:check_config/0,
+                         fun crdt:check_config/0,
                          fun crdt_proposer:check_config/0,
                          fun db_bitcask_merge_extension:check_config/0
                        ]],

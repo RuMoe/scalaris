@@ -20,7 +20,7 @@
 
 -export_type([crdt/0]).
 
--export([new/0, apply_update/3, apply_query/2, merge/2, eq/2, lt/2, lteq/2]).
+-export([new/0, apply_update/3, apply_query/2, merge/2, eq/2, lteq/2]).
 
 -spec apply_update(crdt:update_fun(), non_neg_integer(), crdt()) -> crdt().
 apply_update(U, ReplicaId, CRDT) ->
@@ -29,10 +29,6 @@ apply_update(U, ReplicaId, CRDT) ->
         {arity, 2} -> U(ReplicaId, CRDT)
     end.
 
--spec apply_query(crdt:query_fun(), crdt()) -> crdt().
+-spec apply_query(crdt:query_fun(), crdt()) -> term().
 apply_query(Q, CRDT) -> Q(CRDT).
-
--spec lteq(crdt(), crdt())  -> boolean().
-lteq(CRDT1, CRDT2) -> lt(CRDT1, CRDT2) orelse eq(CRDT1, CRDT2).
-
 

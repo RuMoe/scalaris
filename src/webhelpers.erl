@@ -74,9 +74,11 @@ delete_key(Key, Timeout) ->
 
 %%%-----------------------------Lookup/Put/delete (kvoncseq)----------
 
+-spec lookup_kvoncseq(string()) -> {ok, _} | {fail, not_found}.
 lookup_kvoncseq(Key) ->
     kv_on_cseq:read(Key).
 
+-spec set_key_kvoncseq(string(), client_value()) -> {ok}.
 set_key_kvoncseq(Key, Value) ->
     kv_on_cseq:write(Key, Value).
 

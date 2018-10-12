@@ -51,7 +51,7 @@
 -type entry() :: { any(), %% key
                    pr:pr(), %% r_read
                    pr:pr(), %% r_write  %%TODO: write roudns are not needed???
-                   any() %% value
+                   crdt:crdt() | crdt_bottom %% value
                  }.
 
 %% Messages to expect from this module
@@ -268,7 +268,7 @@ tab2list_raw(State) ->
 new(Key) ->
     new(Key, crdt_bottom).
 
--spec new(any(), any()) -> entry().
+-spec new(any(), crdt:crdt() | crdt_bottom) -> entry().
 new(Key, Val) ->
     {Key,
      %% Note: atoms < pids, so this is a good default.
@@ -290,14 +290,14 @@ entry_r_write(Entry) -> element(3, Entry).
 entry_set_r_write(Entry, Round) -> setelement(3, Entry, Round).
 -spec entry_val(entry()) -> crdt:crdt() | crdt_bottom.
 entry_val(Entry) -> element(4, Entry).
--spec entry_val(entry(), module()) -> crdt:crdt().
+-spec entry_val(entry(), crdt:crdt_module()) -> crdt:crdt().
 entry_val(Entry, DataType) ->
     case entry_val(Entry) of
         crdt_bottom ->
             DataType:new();
         Any -> Any
     end.
--spec entry_set_val(entry(), any()) -> entry().
+-spec entry_set_val(entry(), crdt:crdt()) -> entry().
 entry_set_val(Entry, Value) -> setelement(4, Entry, Value).
 
 
