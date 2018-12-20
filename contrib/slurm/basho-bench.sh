@@ -67,17 +67,6 @@ trap 'trap_cleanup' SIGTERM SIGINT
 
 #=============================
 
-KIND='load'
-DURATION=2
-WORKERS_PER_LG_SERIES="2 4 8 16 32 64 128 256 512 1024 2048"
-OPERATIONS_SERIES="[{put,10},{get,0}] [{put,9},{get,1}] [{put,1},{get,1}] [{put,1},{get,9}] [{put,0},{get,10}]"
-VMS_PER_NODE=1
-LOAD_GENERATORS=1
-NODES=3
-
-WD="$CUMUSCRATCH/$USER/crdt_r3_rbatch_1lg"
-RESULT_DIR="/local/$USER/crdt_r3_rbatch_1lg"
-
 main() {
     is_lg_external
     if ! $EXTERNAL_LG ; then
