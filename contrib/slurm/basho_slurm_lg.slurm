@@ -7,9 +7,9 @@
 #SBATCH -J load_gen_basho
 #SBATCH -p CUMU
 #SBATCH -N 3
-#SBATCH --nodelist=cumu01-[03-05]
+#SBATCH --nodelist=cumu02-[03-05]
 #SBATCH -A csr
-#SBATCH -t 10:00:00
+#SBATCH -t 1-12:00
 #SBATCH --exclusive
 #SBATCH -o example.out
 
@@ -17,7 +17,8 @@
 export LOAD_GENERATORS=3 # load generator are distributed over nodelist
 
 export KIND='load'
-export DURATION=10
+export DURATION=10 # single run benchmark duration
+export TIMEOUT=30 # timeout when scalaris jobs in killed in minutes
 export NODES=3 # number of scalaris nodes
 export VMS_PER_NODE=1
 export WORKERS_PER_LG_SERIES="1 2 4 8 16 32 64 128 256 512 1024 2028"

@@ -153,7 +153,7 @@ main_load(){
 
             OPERATIONS=$OPS
             nodeend=$((NODES-1))
-            NODELIST="cumu01-[00-$nodeend]"
+            NODELIST="cumu02-[00-$nodeend]"
             log info "NODELIST=$NODELIST"
 
             WORKERS=$(printf "%04i" $WORKERS)
