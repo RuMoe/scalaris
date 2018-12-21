@@ -7,7 +7,7 @@
 #SBATCH -J load_gen_basho
 #SBATCH -p CUMU
 #SBATCH -N 3
-#SBATCH --nodelist=cumu02-[03-05]
+#SBATCH --nodelist=cumu01-[03-05]
 #SBATCH -A csr
 #SBATCH -t 1-12:00
 #SBATCH --exclusive

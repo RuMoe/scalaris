@@ -144,16 +144,16 @@ main_size(){
 
 main_load(){
     for WORKERS_PER_LG in $WORKERS_PER_LG_SERIES; do
-        WORKERS=$((WORKERS_PER_LG*LOAD_GENERATORS))
         var=1
         for OPS in $OPERATIONS_SERIES; do
+            WORKERS=$((WORKERS_PER_LG*LOAD_GENERATORS))
             log info "WORKERS=$WORKERS"
             log info "WORKERS_PER_LG=$WORKERS_PER_LG"
             log info "OPERATIONS=$OPS"
 
             OPERATIONS=$OPS
             nodeend=$((NODES-1))
-            NODELIST="cumu02-[00-$nodeend]"
+            NODELIST="cumu01-[00-$nodeend]"
             log info "NODELIST=$NODELIST"
 
             WORKERS=$(printf "%04i" $WORKERS)
