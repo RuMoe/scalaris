@@ -1,4 +1,4 @@
-%% @copyright 2015-2017 Zuse Institute Berlin
+%% @copyright 2015-2018 Zuse Institute Berlin
 
 %%   Licensed under the Apache License, Version 2.0 (the "License");
 %%   you may not use this file except in compliance with the License.
@@ -36,7 +36,8 @@ repeater_num_executions() ->
     1000.
 
 ring_size() ->
-    config:read(replication_factor).
+    5.
+    %% config:read(replication_factor).
 
 all() -> [
           {group, make_ring_group},
@@ -89,6 +90,8 @@ init_per_group(Group, Config) ->
     {priv_dir, PrivDir} = lists:keyfind(priv_dir, 1, Config3),
     unittest_helper:make_ring(RingSize, [{config, [{log_path, PrivDir},
                                                       {leases, true},
+                                                      {replication_factor, ring_size()},
+                                                      {round, 1},
                                                       {leases_delta, ?LEASES_DELTA},
                                                       {db_backend, db_mnesia}]}]),
     unittest_helper:check_ring_size_fully_joined(ring_size()),
@@ -119,13 +122,6 @@ end_per_group(Group, Config) ->
     ok = file:delete(WorkingDir ++ "schema.DAT"),
     unittest_helper:end_per_group(Group, Config).
 
-init_per_testcase(_TestCase = remove_node, Config) ->
-    case config:read(replication_factor) of
-        3 ->
-           {skip, "single node failure might cause data loss in aysmmetric rings for R=3."};
-        _ ->
-            Config
-    end;
 init_per_testcase(_TestCase, Config) ->
     Config.
 
@@ -146,6 +142,7 @@ test_make_ring(Config) ->
     wait_for_expired_leases(Config),
     unittest_helper:make_ring_recover([{config, [{log_path, PrivDir},
                                                  {leases, true},
+                                                 {replication_factor, ring_size()},
                                                  {leases_delta, ?LEASES_DELTA},
                                                  {db_backend, db_mnesia},
                                                  {start_type, recover}]}]),
@@ -172,18 +169,21 @@ read(Config) ->
     wait_for_expired_leases(Config),
     unittest_helper:make_ring_recover( [{config, [{log_path, PrivDir},
                                                   {leases, true},
+                                                  {replication_factor, ring_size()},
                                                   {leases_delta, ?LEASES_DELTA},
                                                   {db_backend, db_mnesia},
                                                   {start_type, recover}]}]),
     lease_checker2:wait_for_clean_leases(500, [{ring_size, ring_size()}]),
     %% ring restored -> checking KV data integrity
-    _ = check_data_integrity(),
+    _ = check_data_integrity(1, read_test),
     true.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% test remove_node/1 remove a node and ensure data integrity after recovery
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 remove_node(Config) ->
+    Round = config:read(round),
+    ct:pal("round: ~w", [Round]),
     ct:pal("wait for check_leases"),
     lease_checker2:wait_for_clean_leases(500, [{ring_size, ring_size()}]),
     SaveNode = lease_checker:get_random_save_node(),
@@ -199,8 +199,8 @@ remove_node(Config) ->
             lease_checker2:get_kv_db(RandomNode),
 
             ct:pal("PRBR state before node is removed"),
-            print_prbr_data(kv_db),
-            _ = print_leases_data(),
+            print_prbr_data(kv_db, Round, before_kill, true),
+            _ = print_leases_data(Round),
 
             %% get relative range of node to remove and check if it is not to large
             {true, LL} = lease_checker:get_dht_node_state_unittest(comm:make_global(RandomNode), lease_list),
@@ -214,12 +214,12 @@ remove_node(Config) ->
             SaveFraction = quorum:minority(R) / R,
             ct:pal("Safe relative range to remove ~p", [SaveFraction]),
             ?assert_w_note(RelativeRange =< SaveFraction, "Removing a safe node means that only"
-                           " one replica should be affected"),
+                           " a minority should be affected"),
 
             %% prbr data of node for diagnostic purpose...
             comm:send_local(RandomNode, {prbr, tab2list_raw, kv_db, self()}),
             receive
-                {_, NodeData} -> NodeData
+                {kv_db, NodeData} -> NodeData
             end,
             Values = [prbr:entry_val(E) || E <- NodeData],
             ct:pal("Number of values: ~p~nNumber of unique values: ~p~nValue list:~p",
@@ -239,38 +239,41 @@ remove_node(Config) ->
             lease_checker2:wait_for_clean_leases(500, [{ring_size, ring_size()-1}]),
 
             ct:pal("PRBR state after leases expired"),
-            print_prbr_data(kv_db),
-            _ = print_leases_data(),
+            print_prbr_data(kv_db, Round, after_kill, true),
+            _ = print_leases_data(Round),
 
             %% check data integrity
             ct:pal("check data integrity"),
-            _ = check_data_integrity(),
+            _ = check_data_integrity(Round, before_rrepair),
             %% "repair" replicas
             ct:pal("repair replicas"),
             _ = repair_replicas(),
 
             ct:pal("PRBR state after calling repair_replicas"),
-            print_prbr_data(kv_db),
-            _ = print_leases_data(),
+            print_prbr_data(kv_db, Round, after_rrepair, true),
+            _ = print_leases_data(Round),
 
             %% add node to reform ring_size() node ring
             ct:pal("add node"),
-            _ = admin:add_nodes(1),
+            NewNode = admin:add_nodes(1),
+            ct:pal("added node: ~p~n", [NewNode]),
             ct:pal("sleep"),
-            timer:sleep(3000),
+            timer:sleep(1000),
             ct:pal("check_ring_size_fully_joined"),
             unittest_helper:check_ring_size_fully_joined(ring_size()),
             ct:pal("wait for check_leases"),
             lease_checker2:wait_for_clean_leases(500, [{ring_size, ring_size()}]),
 
             ct:pal("PRBR state after node was inserted"),
-            print_prbr_data(kv_db),
-            _ = print_leases_data(),
+            print_prbr_data(kv_db, Round, after_insert, true),
+            _ = print_leases_data(Round),
 
             true
-    end.
+    end,
+    config:write(round, Round + 1),
+    true.
 
-check_data_integrity() ->
+check_data_integrity(Round, Label) ->
     io:format("show prbr statistics for the ring~n"),
     lease_checker2:get_kv_db(),
     Pred = fun (Id) ->
@@ -289,22 +292,26 @@ check_data_integrity() ->
             ct:pal("Missing elements are:~n~w", [Missing]),
             ct:pal("Printing missing element data..."),
             [print_element_data(E, kv_db) || E <- Missing],
-            print_prbr_data(kv_db),
+            print_prbr_data(kv_db, Round, Label, true),
 
             100 = X
     end.
 
 repair_replicas() ->
-    case config:read(replication_factor) rem 2 =:= 1 of
-        true -> %% only repair for odd replication factors
-            io:format("show prbr statistics for the ring~n"),
-            lease_checker2:get_kv_db(),
-            _ = [kv_on_cseq:write(integer_to_list(X),X) || X <- lists:seq(1, 100)],
-            io:format("show prbr statistics for the ring~n"),
-            lease_checker2:get_kv_db();
-        false ->
-            ok
-    end.
+    %% we need repair also for even replication degrees
+    %%    case config:read(replication_factor) rem 2 =:= 1 of
+    %%        true -> %% only repair for odd replication factors
+    io:format("show prbr statistics for the ring before repair~n"),
+    lease_checker2:get_kv_db(),
+    _ = [kv_on_cseq:write(integer_to_list(X),X) || X <- lists:seq(1, 100)],
+    %% let also arrive messages to remaining minority
+    timer:sleep(200),
+    io:format("show prbr statistics for the ring after repair~n"),
+    lease_checker2:get_kv_db()%;
+    %%     false ->
+    %%         ok
+    %% end.
+.
 
 wait_for_expired_leases(Config) ->
     {leases_timeout, LeasesTimeout} = lists:keyfind(leases_timeout, 1, Config),
@@ -312,7 +319,7 @@ wait_for_expired_leases(Config) ->
 
 %%@doc Prints a list of tuples showing which value is stored in which dht node
 %%     Format : [{Value, [list_of_dht_nodes_value_is_stored_in]}]
-print_prbr_data(DB) ->
+print_prbr_data(DB, Round, Label, MayCrash) ->
     PrbrData = get_prbr_data(fun(NodePid, E) ->
                                 {prbr:entry_val(E), NodePid}
                              end, DB),
@@ -320,12 +327,39 @@ print_prbr_data(DB) ->
                                              dict:new(), PrbrData),
     GroupedValues = lists:sort(dict:to_list(GroupedByValueDict)),
 
+    WoBottom = [{Entry, NodeList} || {Entry, NodeList} <- GroupedValues,
+                                Entry =/= prbr_bottom],
+
+
+    Bad = [{Entry, NodeList} || {Entry, NodeList} <- WoBottom,
+                                length(NodeList) <
+                                 quorum:majority_for_accept(config:read(replication_factor))],
+
+    Uniques = [length(lists:usort(NodeList)) || {_Entry, NodeList} <- WoBottom],
+
+    {Min, Max} = case length(Uniques) of
+                     0 -> {bottom, bottom};
+                     _ -> {lists:min(Uniques), lists:max(Uniques)}
+                 end,
+
+    ct:pal("# unique replicas: min:~w; max:~w~n", [Min, Max]),
     ct:pal("PRBR state ~w:~nFormat [{Value, [list_of_dht_nodes_value_is_stored_in]}]~n"
            "~100p", [DB, GroupedValues]),
-    ok.
+    case MayCrash of
+        true ->
+            case length(Bad) of
+                0 -> true;
+                _ -> S = io_lib:format("entries with not enough replicas (round:~w, db=~w, label=~w)",
+                                       [Round, DB, Label]),
+                     S2 = lists:flatten(S),
+                     ct:fail(S2) %% 14B04 ...
+            end;
+        _ -> ok
+    end.
 
-print_leases_data() ->
-    _ = [print_prbr_data({lease_db, I}) || I <- lists:seq(1, config:read(replication_factor))].
+print_leases_data(Round) ->
+    _ = [print_prbr_data({lease_db, I}, Round, leases_db, false) || I <-
+                             lists:seq(1, config:read(replication_factor))].
 
 print_element_data(Id, DB) ->
     HashedKey = ?RT:hash_key(integer_to_list(Id)),
@@ -352,9 +386,10 @@ get_prbr_data(DataExtractFun, DB) ->
         [begin
             comm:send_local(ThisNode, {prbr, tab2list_raw, DB, self()}),
             receive
-                {_, List} -> [DataExtractFun(ThisNode, E) || E <- List]
-            after 1000 ->
-                ct:pal("DHT node ~p does not reply...", [ThisNode]),
-                []
+                {DB, List} -> [DataExtractFun(ThisNode, E) || E <- List]
+%% Do not risk losing answers and receiving them in the next call, so do not use 'after'
+%%            after 1000 ->
+%%                ct:pal("DHT node ~p does not reply...", [ThisNode]),
+%%                []
             end
          end || ThisNode <- DhtNodes]).
