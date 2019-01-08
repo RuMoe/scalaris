@@ -515,7 +515,11 @@ on({rejoin, Id, Options, {get_move_state_response, MoveState}}, State) ->
     JoinOptions = [{move_state, MoveState} | Options],
     IdVersion = node:id_version(dht_node_state:get(State, node)),
     dht_node_state:delete_for_rejoin(State), % clean up state!
-    dht_node_join:join_as_other(Id, IdVersion+1, JoinOptions).
+    dht_node_join:join_as_other(Id, IdVersion+1, JoinOptions);
+
+on({force_crash}, State) ->
+    erlang:halt(1, [{flush, false}]),
+    State.
 
 %% userdevguide-begin dht_node:start
 %% @doc joins this node in the ring and calls the main loop
@@ -561,7 +565,13 @@ init(Options) ->
                      _ -> ?RT:get_random_node_id()
                  end,
             case {IsFirst, modr:is_enabled()} of
-                {true, _} -> dht_node_join:join_as_first(Id, 0, Options);
+                {true, _} ->
+                    case config:read(crash_first_node) of
+                        0 -> ok;
+                        CrashTime ->
+                            comm:send_local_after(1000 * CrashTime, self(), {force_crash})
+                    end,
+                    dht_node_join:join_as_first(Id, 0, Options);
                 {false, false} -> dht_node_join:join_as_other(Id, 0, Options);
                 {false, true} -> %% disable passive lb during join operation
                     dht_node_join:join_as_other(Id, 0, [{skip_psv_lb} | Options])
