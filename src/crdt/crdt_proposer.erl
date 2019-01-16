@@ -23,7 +23,7 @@
 -define(TRACE(X,Y), ok).
 
 -define(CACHED_ROUTING, (config:read(cache_dht_nodes))).
--define(COLLECT_ROUND_TRIPS, true).
+-define(LOG_ROUND_TRIPS, (config:read(log_round_trips))).
 
 -define(READ_BATCHING_INTERVAL, (config:read(read_batching_interval))).
 -define(READ_BATCHING_INTERVAL_DIVERGENCE, 2).
@@ -542,7 +542,7 @@ send_to_all_replicas(Key, Message, _CachedRouting=false) ->
 -spec inform_client(write_done, entry()) -> ok.
 inform_client(write_done, Entry) ->
     Client = entry_client(Entry),
-    collect_round_trips(Entry, write),
+    log_round_trips(Entry, write),
     case is_tuple(Client) of
         true ->
             % must unpack envelope
@@ -554,7 +554,7 @@ inform_client(write_done, Entry) ->
 -spec inform_client(read_done, entry(), any()) -> ok.
 inform_client(read_done, Entry, QueryResult) ->
     Client = entry_client(Entry),
-    collect_round_trips(Entry, read),
+    log_round_trips(Entry, read),
     case is_tuple(Client) of
         true ->
             % must unpack envelope
@@ -563,9 +563,9 @@ inform_client(read_done, Entry, QueryResult) ->
             comm:send_local(entry_client(Entry), {read_done, QueryResult})
     end.
 
--spec collect_round_trips(entry(), write | read) -> ok.
-collect_round_trips(Entry, OpType) ->
-    case ?COLLECT_ROUND_TRIPS of
+-spec log_round_trips(entry(), write | read) -> ok.
+log_round_trips(Entry, OpType) ->
+    case ?LOG_ROUND_TRIPS of
         true ->
             RoundTrips = entry_round_trips(Entry),
             log:log(error, "rt,~p,~p", [OpType, RoundTrips]);
