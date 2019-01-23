@@ -542,7 +542,6 @@ send_to_all_replicas(Key, Message, _CachedRouting=false) ->
 -spec inform_client(write_done, entry()) -> ok.
 inform_client(write_done, Entry) ->
     Client = entry_client(Entry),
-    log_round_trips(Entry, write),
     case is_tuple(Client) of
         true ->
             % must unpack envelope

@@ -24,8 +24,8 @@ export VMS_PER_NODE=1
 export WORKERS_PER_LG_SERIES="128"
 export OPERATIONS_SERIES="[{put,1},{get,19}]"
 
-export WD="$CUMUSCRATCH/$USER/crdt_paper/crdt_paxos_crash_batching_read"
-export RESULT_DIR="/local/$USER/crdt_paper/crdt_paxos_crash_batching_read"
+export WD="$CUMUSCRATCH/$USER/crdt_paper/crdt_paxos_roundtrips_batching"
+export RESULT_DIR="/local/$USER/crdt_paper/crdt_paxos_roundtrips_batching"
 
 
 $(pwd)/basho-bench.sh
