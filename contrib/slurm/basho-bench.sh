@@ -153,7 +153,7 @@ main_load(){
 
             OPERATIONS=$OPS
             nodeend=$((NODES-1))
-            NODELIST="cumu02-[00-$nodeend]"
+            NODELIST="cumu01-[02-$nodeend]"
             log info "NODELIST=$NODELIST"
 
             WORKERS=$(printf "%04i" $WORKERS)
@@ -508,7 +508,7 @@ write_config() {
 %        {1, [{put, 0}, {get, 1}]}
 %    ]}.
 
-{driver, basho_bench_driver_scalaris_crdt}.
+{driver, $BASHO_BENCH_DRIVER}.
 {key_generator, {int_to_str, {function, basho_bench_fixed_keygen, fixed, [12345]}}}.
 
 %% size in Bytes

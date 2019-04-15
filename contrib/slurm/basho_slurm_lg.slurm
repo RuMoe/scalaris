@@ -27,5 +27,10 @@ export OPERATIONS_SERIES="[{put,1},{get,19}]"
 export WD="$CUMUSCRATCH/$USER/crdt_paper/crdt_paxos_roundtrips_batching"
 export RESULT_DIR="/local/$USER/crdt_paper/crdt_paxos_roundtrips_batching"
 
+# What kind of benchmark
+# basho_bench_driver_scalaris           - rbrcseq
+# basho_bench_driver_scalaris_leader    - rbrcseq where all requests are sent to same replica
+# basho_bench_driver_scalaris_crdt      - CRDT Paxos
+export BASHO_BENCH_DRIVER="basho_bench_driver_scalaris_leader"
 
 $(pwd)/basho-bench.sh
