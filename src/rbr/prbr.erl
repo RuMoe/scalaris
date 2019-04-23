@@ -312,15 +312,14 @@ on({prbr, write, DB, Cons, Proposer, Key, DataType, ProposerUID, InRound, OldWri
                             WriteFilter(entry_val(KeyEntry), PassedToUpdate, Value)
                     end,
 
-                TWriteRound = pr:new(pr:get_r(InRound), ProposerUID),
                 %% store information to be able to reproduce the request in
                 %% write_throughs. We modify the InRound here to avoid duplicate
                 %% transfer of the Value etc.
-                NewWriteRound = pr:set_wti(TWriteRound, {Ret, LearnerForWTI}),
+                NewWriteRound = pr:set_wti(InRound, {Ret, LearnerForWTI}),
                 TEntry = entry_set_r_write(KeyEntry, NewWriteRound),
 
                 %% prepare for fast write
-                NextWriteRound = next_read_round(TEntry, ProposerUID),
+                NextWriteRound = next_read_round(TEntry, pr:get_id(InRound)),
                 T2Entry = entry_set_r_read(TEntry, NextWriteRound),
 
                 NewEntry = entry_set_last_wf(T2Entry, WriteFilter),
@@ -336,6 +335,7 @@ on({prbr, write, DB, Cons, Proposer, Key, DataType, ProposerUID, InRound, OldWri
 
                 set_entry(entry_set_val(NewEntry, NewVal), TableName);
             {false, Reason} ->
+                io:format("WRITABLE IS FALSE~n"),
                 RoundTried = pr:new(pr:get_r(InRound), ProposerUID),
                 trace_mpath:log_info(self(), {'prbr:on(write) denied',
                                               round, RoundTried}),
@@ -500,6 +500,7 @@ next_read_round(Entry, ProposerUID) ->
 writable(Entry, InRound, OldWriteRound, WF) ->
     LatestSeenRead = entry_r_read(Entry),
     LatestSeenWrite = entry_r_write(Entry),
+    %io:format("~n~p~n~p~n~p~n~p~n~n", [LatestSeenRead, LatestSeenWrite, InRound, OldWriteRound]),
     InRoundR = pr:get_r(InRound),
     InRoundId = pr:get_id(InRound),
     LatestSeenReadR = pr:get_r(LatestSeenRead),

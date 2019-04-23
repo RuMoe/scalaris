@@ -24,11 +24,11 @@
 
 %% assumes that all writes are done for the same key
 -define(FAST_WRITES, true).
--define(ETS_TABLE_NAME, fast_round_table).
 -define(ROUND_KEY, fast_round).
-
 -include("scalaris.hrl").
 -include("client_types.hrl").
+
+-on_load(fast_write_init/0).
 
 -export([read/1]).
 -export([write/2]).
@@ -109,52 +109,89 @@ write(Key, Val) ->
 
 -spec fast_write(client_key(), client_value()) -> {ok}.
 fast_write(Key, _Val) ->
-    case ets:info(?ETS_TABLE_NAME) of %% better?
+    RequestSequenzer =
+        fun() ->
+            StartRound = receive {init_round, R} -> R end,
+            ProcessFun =
+                fun(F, Round) ->
+                    receive {next_request, Client} ->
+                        Client ! {next_round, Round}
+                    end,
+                    receive {do_next} -> ok end,
+                    NewRound = pr:new(pr:get_r(Round) + 1, pr:get_id(Round)),
+                    F(F, NewRound)
+                end,
+            ProcessFun(ProcessFun, StartRound)
+        end,
+
+    Init =
+      case whereis(request_handler) of
         undefined ->
-            _ = spawn(fun() ->
-                    %% really ugly... spawn a process which has ownership of the table
-                    %% so that it is not cleaned up after each request
-                    ets:new(?ETS_TABLE_NAME, [public,named_table]),
-                    ets:insert(?ETS_TABLE_NAME, {?ROUND_KEY, pr:new(1,1)}),
-                    receive % never terminate
-                        {done} ->
-                            ok
-                    end
-                end);
-        _ -> ok
-    end,
+            is_first ! {first, self()},
+            IsFirst = receive {first, Bool} -> Bool end,
+            case IsFirst of
+                false -> timer:sleep(100); %% hack to ensure that request process is registered
+                true -> ok
+            end,
+            IsFirst;
+        _ ->
+            false
+      end,
+
+    RoundToUse =
+        case Init of
+            true ->
+                Pid = spawn(fun() -> RequestSequenzer() end),
+                register(request_handler, Pid),
+                pr:new(1, '_');
+            false ->
+                request_handler ! {next_request, self()},
+                receive {next_round, NewRound} -> NewRound end
+        end,
 
 
-    {?ROUND_KEY, LastFastWriteRound} = hd(ets:lookup(?ETS_TABLE_NAME, ?ROUND_KEY)),
-    {RF, CC, WF} = get_write_op_addition(),
-
-    rbrcseq:qwrite_fast(kv_db, self(), ?RT:hash_key(Key), ?MODULE,
-                   RF, CC, WF, 1, LastFastWriteRound, 0),
-    trace_mpath:thread_yield(),
-    receive
-        ?SCALARIS_RECV({qwrite_done, _ReqId, NextFastWriteRound, _Value, _WriteRet}, {ok}); %%;
-        ?SCALARIS_RECV({qwrite_deny, _ReqId, NextFastWriteRound, _Value, Reason},
-                       begin log:log("Write failed on key ~p: ~p~n", [Key, Reason]),
-                       {ok} end) %% TODO: extend write_result type {fail, Reason} )
-    after 5000 ->
-            log:log("~p write hangs at key ~p, ~p~n",
-                    [self(), Key, erlang:process_info(self(), messages)]),
+    case pr:get_r(RoundToUse) of
+        1 ->
+            {RF, CC, WF} = get_write_op_addition(),
+            rbrcseq:qwrite_fast(kv_db, self(), ?RT:hash_key(Key), ?MODULE,
+                   RF, CC, WF, 1, RoundToUse, 0),
             receive
-                ?SCALARIS_RECV({qwrite_done, _ReqId, NextFastWriteRound, _Value, _WriteRet},
-                               begin
-                                   log:log("~p write was only slow at key ~p~n",
-                                           [self(), Key]),
-                                   {ok}
-                               end); %%;
+                ?SCALARIS_RECV({qwrite_done, _ReqId, NextFastWriteRound, _Value, _WriteRet}, {ok}); %%;
                 ?SCALARIS_RECV({qwrite_deny, _ReqId, NextFastWriteRound, _Value, Reason},
-                               begin log:log("~p Write failed: ~p~n",
-                                             [self(), Reason]),
-                                     {ok} end)
+                               begin log:log("Write failed on key ~p: ~p~n", [Key, Reason]),
+                               {ok} end)
+            end,
+            request_handler ! {init_round, NextFastWriteRound};
+        _ ->
+            {RF, CC, WF} = get_write_op_addition(),
+            rbrcseq:qwrite_fast(kv_db, self(), ?RT:hash_key(Key), ?MODULE,
+                RF, CC, WF, 1, RoundToUse, 0),
+            request_handler ! {do_next},
+            receive
+                ?SCALARIS_RECV({qwrite_done, _ReqId, _NextFastRound, _Value, _WriteRet}, ok); %%;
+                ?SCALARIS_RECV({qwrite_deny, _ReqId, _NextFastRound, _Value, Reason},
+                               begin log:log("Write failed on key ~p: ~p~n", [Key, Reason]),
+                               ok end)
             end
     end,
 
-    ets:insert(?ETS_TABLE_NAME, {?ROUND_KEY, NextFastWriteRound}),
     {ok}.
+
+fast_write_init() ->
+    P = spawn(fun() ->
+                receive {first, Pi} ->
+                    Pi ! {first, true}
+                end,
+                L = fun(Loop) ->
+                        receive {first, Pid} ->
+                            Pid ! {first, false}
+                        end,
+                        Loop(Loop)
+                    end,
+                L(L)
+            end),
+    register(is_first, P),
+    ok.
 
 
 %% ------------------------------- READ OPERATIONS -----------------------------
