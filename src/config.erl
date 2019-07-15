@@ -235,12 +235,17 @@ cfg_exists(Key) ->
 %%      prints an error message if not, also returns the result.
 -spec cfg_test_and_error(Key::atom(), Pred::fun((any()) -> boolean()), Msg::list()) -> boolean().
 cfg_test_and_error(Key, Pred, Msg) ->
-    Value = read(Key),
-    case cfg_exists(Key) andalso Pred(Value) of
-        true -> true;
-        false -> error_logger:error_msg("~p = ~p ~s (see scalaris.cfg and scalaris.local.cfg)~n",
+    case read(Key) of
+        failed ->
+            error_logger:error_msg("~p not defined (see scalaris.cfg and scalaris.local.cfg)~n", [Key]),
+            false;
+        Value ->
+            case Pred(Value) of
+                true -> true;
+                _ -> error_logger:error_msg("~p = ~p ~s (see scalaris.cfg and scalaris.local.cfg)~n",
                                             [Key, Value, lists:flatten(Msg)]),
-                 false
+                     false
+            end
     end.
 
 -spec cfg_is_atom(Key::atom()) -> boolean().
@@ -400,8 +405,12 @@ cfg_is_greater_than(Key, Min) ->
 
 -spec cfg_is_greater_than_equal(Key::atom(), Min::number() | atom()) -> boolean().
 cfg_is_greater_than_equal(_Key, failed) -> false; %% stop endless loop
-cfg_is_greater_than_equal(Key, Min) when erlang:is_atom(Min) ->
-    cfg_is_greater_than_equal(Key, read(Min));
+cfg_is_greater_than_equal(Key, Min0) when erlang:is_atom(Min0) ->
+    Min = read(Min0),
+    %% stop endless loop (do not recurse!)
+    IsGreaterThanEqual = fun(Value) -> (Value >= Min) end,
+    Msg = io_lib:format("is not larger than or equal to ~p", [Min]),
+    cfg_test_and_error(Key, IsGreaterThanEqual, Msg);
 cfg_is_greater_than_equal(Key, Min) ->
     IsGreaterThanEqual = fun(Value) -> (Value >= Min) end,
     Msg = io_lib:format("is not larger than or equal to ~p", [Min]),
@@ -409,8 +418,12 @@ cfg_is_greater_than_equal(Key, Min) ->
 
 -spec cfg_is_less_than(Key::atom(), Max::number() | atom()) -> boolean().
 cfg_is_less_than(_Key, failed) -> false; %% stop endless loop
-cfg_is_less_than(Key, Max) when erlang:is_atom(Max) ->
-    cfg_is_less_than(Key, read(Max));
+cfg_is_less_than(Key, Max0) when erlang:is_atom(Max0) ->
+    Max = read(Max0),
+    %% stop endless loop (do not recurse!)
+    IsLessThan = fun(Value) -> (Value < Max) end,
+    Msg = io_lib:format("is not less than ~p", [Max]),
+    cfg_test_and_error(Key, IsLessThan, Msg);
 cfg_is_less_than(Key, Max) ->
     IsLessThan = fun(Value) -> (Value < Max) end,
     Msg = io_lib:format("is not less than ~p", [Max]),
@@ -418,8 +431,12 @@ cfg_is_less_than(Key, Max) ->
 
 -spec cfg_is_less_than_equal(Key::atom(), Max::number() | atom()) -> boolean().
 cfg_is_less_than_equal(_Key, failed) -> false; %% stop endless loop
-cfg_is_less_than_equal(Key, Max) when erlang:is_atom(Max) ->
-    cfg_is_less_than_equal(Key, read(Max));
+cfg_is_less_than_equal(Key, Max0) when erlang:is_atom(Max0) ->
+    Max = read(Max0),
+    %% stop endless loop (do not recurse!)
+    IsLessThanEqual = fun(Value) -> (Value =< Max) end,
+    Msg = io_lib:format("is not less than or equal to ~p", [Max]),
+    cfg_test_and_error(Key, IsLessThanEqual, Msg);
 cfg_is_less_than_equal(Key, Max) ->
     IsLessThanEqual = fun(Value) -> (Value =< Max) end,
     Msg = io_lib:format("is not less than or equal to ~p", [Max]),

@@ -1,4 +1,4 @@
-#   Copyright 2007-2018 Konrad-Zuse-Zentrum für Informationstechnik Berlin
+#   Copyright 2007-2019 Konrad-Zuse-Zentrum für Informationstechnik Berlin
 #
 #   Licensed under the Apache License, Version 2.0 (the "License");
 #   you may not use this file except in compliance with the License.
@@ -30,6 +30,11 @@ AC_SUBST(TRUE)
 AC_PROG_SED
 AC_PATH_PROG(DOXYGEN, doxygen)
 AC_SUBST(DOXYGEN)
+
+AC_PATH_PROG(AR, ar)
+AC_SUBST(AR)
+AC_PATH_PROG(LIBTOOL, libtool)
+AC_SUBST(LIBTOOL)
 
 ###########################################################
 #
@@ -625,6 +630,21 @@ AS_IF([test "${erlang_cv_new_stacktrace}" = "true"],
        AC_MSG_NOTICE([new stacktrace syntax is available])],
       [AC_MSG_NOTICE([new stacktrace syntax is not available])])
 
+###########################################################
+#
+# check for socket:open/2 since 22.0
+#
+###########################################################
+# https://github.com/erlang/otp/commit/3ca71520bfb664f0ea809ffdf41505936e4d5e90
+SOCKET_OPEN=false
+socket_open=`"${ERL}" -noshell -eval 'code:ensure_loaded(socket),io:format("~p~n", [[erlang:function_exported(socket,open,2)]]), erlang:halt().' | tail -1`
+AS_IF([test "${socket_open}" = "true"],
+      [EMAKEFILEDEFINES="${EMAKEFILEDEFINES}, {d, have_socket_open}"
+       EDOCMACROS="${EDOCMACROS}, {have_socket_open, true}"
+       DIALYZER_FLAGS="${DIALYZER_FLAGS} -Dhave_socket_open"
+       SSL_HANDSHAKE=true
+       AC_MSG_NOTICE([socket:open() is available])],
+      [AC_MSG_NOTICE([socket:open() is not available])])
 
 ###########################################################
 #
@@ -768,6 +788,13 @@ AC_SUBST(ENABLEPYTHON3INSTALL)
 #
 ###########################################################
 
+SAVECFLAGS=$CFLAGS
+CFLAGS="-I$ERLANG_ROOT_DIR/erts-$ERLANG_LIB_VER_erts/include $CFLAGS"
+AC_LANG_PUSH([C])
+AC_CHECK_HEADER([erl_nif.h], [], [])
+AC_LANG_POP([C])
+CFLAGS=$SAVECFLAGS
+
 #http://unix.stackexchange.com/questions/35183/how-do-i-identify-which-linux-distro-is-running
 
 LINUXVERSION="unknown linux"
@@ -793,21 +820,25 @@ case `uname -s` in
      NIFFLAGS="-shared"
      DRIVER_OS=LINUX
      OS=$LINUXVERSION
+     ARCHIVECMD="$ac_cv_path_AR rv"
      ;;
  Linux*)
      NIFFLAGS="-shared"
      DRIVER_OS=LINUX
      OS=$LINUXVERSION
+     ARCHIVECMD="$ac_cv_path_AR rv"
      ;;
  Darwin*)
      NIFFLAGS="-flat_namespace -undefined dynamic_lookup"
      DRIVER_OS=MACOSX
      OS="OSX `sw_vers -productVersion`"
+     ARCHIVECMD="$ac_cv_path_LIBTOOL -static -o"
      ;;
  darwin*)
      NIFFLAGS="-flat_namespace -undefined dynamic_lookup"
      DRIVER_OS=MACOSX
      OS="OSX `sw_vers -productVersion`"
+     ARCHIVECMD="$ac_cv_path_LIBTOOL -static -o"
      ;;
 esac
 
@@ -835,6 +866,7 @@ fi
 echo "detected OS is: '$OS' $SRC $CONFIGURESTATUS"
 AC_SUBST(DRIVER_OS)
 AC_SUBST(NIFFLAGS)
+AC_SUBST(ARCHIVECMD)
 
 mkdir -p ~/.yaws 2> /dev/null
 

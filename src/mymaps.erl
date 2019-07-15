@@ -1,4 +1,4 @@
-%% @copyright 2016 Zuse Institute Berlin
+%% @copyright 2016-2019 Zuse Institute Berlin
 
 %   Licensed under the Apache License, Version 2.0 (the "License");
 %   you may not use this file except in compliance with the License.
@@ -22,7 +22,7 @@
 -vsn('$Id$').
 
 -export([new/0,
-         get/2, get/3, find/2, is_key/2,
+         get/2, get/3, take/2, find/2, is_key/2,
          put/3, remove/2, update/3,
          from_list/1, to_list/1,
          keys/1, values/1,
@@ -57,6 +57,31 @@ get(Key, Map, Default) ->
     case gb_trees:lookup(Key, Map) of
         {value, Value} -> Value;
         none -> Default
+    end.
+-endif.
+
+-spec take(Key::term(), Map::mymap()) -> {Value::term(),  Map2::mymap()} | error.
+-ifdef(with_maps).
+take(Key, Map) ->
+    try maps:take(Key, Map) of
+        Value -> Value
+    catch error:undef ->
+            %% no longer necessary when we drop support for Erlang < 19.0
+            %% Erlang 18.0 to 18.3 do not have a maps:take/2 function
+            %% get and delete can do the same logic
+            try maps:get(Key, Map) of
+                X ->
+                    NewMap = maps:remove(Key, Map),
+                    {X, NewMap}
+            catch error:_ -> error
+            end
+    end.
+-else.
+take(Key, Map) ->
+    try gb_trees:take(Key, Map) of
+        Value -> Value
+    catch
+        error:_ -> error
     end.
 -endif.
 

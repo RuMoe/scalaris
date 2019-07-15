@@ -1,8 +1,5 @@
 SHELL=@CXXSHELL@
 
-AR=ar
-ARFLAGS=rv
-RANLIB=echo
 CXX=@CXX@
 CXXFLAGS=@CXXFLAGS@ -Wall @BOOST_CPPFLAGS@ @OPENSSL_INCLUDES@ -Iinclude
 LDFLAGS=@LDFLAGS@ @BOOST_LDFLAGS@ @BOOST_SYSTEM_LIB@ @BOOST_REGEX_LIB@ @BOOST_ASIO_LIB@ @BOOST_UNIT_TEST_FRAMEWORK_LIB@ @OPENSSL_LDFLAGS@ @OPENSSL_LIBS@ -lpthread
@@ -28,17 +25,17 @@ all: libscalaris.a scalaris tests ssl-tests
 cpp-test : tests
 	$(VC)./tests --report_level=detailed
 
-tests: $(OBJS_TEST_NOSSL) $(OBJS)
+tests: $(OBJS_TEST_NOSSL) libscalaris.a
 	$(NVC)echo -e "\e[0;33mCreating tests\033[39m"
 	$(VC)$(CXX) -o $@ $(OBJS_TEST_NOSSL) libscalaris.a $(LDFLAGS)
 
-ssl-tests: $(OBJS_TEST_SSL) $(OBJS)
+ssl-tests: $(OBJS_TEST_SSL) libscalaris.a
 	$(NVC)echo -e "\e[0;33mCreating ssl-tests\033[39m"
 	$(VC)$(CXX) -o $@ $(OBJS_TEST_SSL) libscalaris.a $(LDFLAGS)
 
 libscalaris.a: $(OBJS)
 	$(NVC)echo -e "\e[0;33mCreating archive" $@ "\033[39m"
-	$(VC)$(AR) $(ARFLAGS) $@ $(OBJS)
+	$(VC)@ARCHIVECMD@ $@ $(OBJS)
 
 .cpp.o: Makefile
 	$(NVC)echo -e "\e[0;32mCompiling" $< "\033[39m"
@@ -50,8 +47,9 @@ scalaris: libscalaris.a src/cli.o
 
 clean:
 	@-rm -rf $(shell find . -type f -name '*.o')
+	@-rm -rf $(shell find . -type f -name '*.o.json')
 	@-rm -rf $(shell find . -type f -name '*.d')
-	@-rm -f ./tests ./ssl-tests ./scalaris
+	@-rm -f ./tests ./ssl-tests ./scalaris ./libscalaris.a
 
 # note, double $ because of escaping in Makefiles
 compile_commands.json: $(SRC_CPP) $(SRC_TEST_CPP) Makefile

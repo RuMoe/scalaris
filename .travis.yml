@@ -3,7 +3,7 @@ language: generic
 matrix:
   include:
     - os: osx
-      osx_image: xcode10
+      osx_image: xcode10.2
       addons:
         homebrew:
           packages:
@@ -21,10 +21,11 @@ matrix:
           packages:
             - automake
             - clang
-            - libboost1.55-all-dev
+            - libboost-all-dev
             - python3
             - erlang
             - erlang-dev
+            - ant
 
 script:
   - env | grep TRAVIS

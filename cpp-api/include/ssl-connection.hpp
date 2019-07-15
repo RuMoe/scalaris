@@ -1,4 +1,4 @@
-// Copyright 2015-2018 Zuse Institute Berlin
+// Copyright 2015-2019 Zuse Institute Berlin
 //
 //    Licensed under the Apache License, Version 2.0 (the "License");
 //    you may not use this file except in compliance with the License.
@@ -16,14 +16,15 @@
 
 #include <array>
 #include <iostream>
-#include <string>
 #include <stdexcept>
+#include <string>
 
-#include <boost/asio.hpp>
-#include <boost/asio/ssl.hpp>
 #include "converter.hpp"
 #include "exceptions.hpp"
 #include "json/json.h"
+#include <boost/asio/io_service.hpp>
+#include <boost/asio/ip/tcp.hpp>
+#include <boost/asio/ssl.hpp>
 
 #include "connection.hpp"
 
@@ -37,6 +38,7 @@ namespace scalaris {
     std::string password = {""};
 
     bool hasToConnect = true;
+
   public:
     /**
      * creates a connection instance
@@ -44,8 +46,7 @@ namespace scalaris {
      * @param _location the path location for JSON-RPC
      * @param port the TCP port of the Scalaris instance
      */
-    SSLConnection(std::string _hostname,
-                  std::string _link  = "jsonrpc.yaws");
+    SSLConnection(std::string _hostname, std::string _link = "jsonrpc.yaws");
 
     ~SSLConnection();
 
@@ -81,9 +82,11 @@ namespace scalaris {
                                   Json::Value params, bool reconnect = true);
     Json::Value process_result(const Json::Value& value);
 
-    bool verify_callback(bool preverified, boost::asio::ssl::verify_context& ctx);
+    bool verify_callback(bool preverified,
+                         boost::asio::ssl::verify_context& ctx);
 
-    std::string password_callback(std::size_t max_length,
-                                  boost::asio::ssl::context::password_purpose purpose);
+    std::string
+    password_callback(std::size_t max_length,
+                      boost::asio::ssl::context::password_purpose purpose);
   };
-}
+} // namespace scalaris
