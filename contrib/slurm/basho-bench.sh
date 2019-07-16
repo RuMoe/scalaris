@@ -108,10 +108,22 @@ main_lgs(){
 
 main_value() {
     for VALUE_SIZE in $VALUE_SIZES; do
-        local value=$(printf "%04i" $VALUE_SIZE)
-        PREFIX="value$value"
-        log info "starting value benchmark with $VALUE_SIZE"
-        repeat_benchmark
+        var=1
+        for OPS in $OPERATIONS_SERIES; do
+            WORKERS=$((WORKERS_PER_LG*LOAD_GENERATORS))
+            log info "WORKERS=$WORKERS"
+            log info "WORKERS_PER_LG=$WORKERS_PER_LG"
+
+            OPERATIONS=$OPS
+            nodeend=$((NODES-1))
+            NODELIST="cumu01-[02-$nodeend]"
+
+            local value=$(printf "%06i" $VALUE_SIZE)
+            PREFIX="value$value-$var"
+            log info "starting value benchmark with $VALUE_SIZE"
+            repeat_benchmark
+            let "var++"
+        done
     done
 }
 
@@ -386,12 +398,12 @@ start_scalaris() {
     # start sbatch command and capture output
     # the ${var:+...} expands only, if the variable is set and non-empty
     RET=$( sbatch -A csr -o $WD/$NAME/slurm-%j.out \
-            ${PARTITION:+-p $PARTITION} \
-            ${NODES:+-N $NODES} \
-            ${NODELIST:+ --nodelist=$NODELIST} \
-            ${TIMEOUT:+ -t $TIMEOUT} \
-            basho-bench.slurm
-         )
+        ${SLURM_JOB_PARTITION:+-p $SLURM_JOB_PARTITION} \
+        ${NODES:+-N $NODES} \
+        ${NODELIST:+ --nodelist=$NODELIST} \
+        ${TIMEOUT:+ -t $TIMEOUT} \
+        basho-bench.slurm
+            )
 
     # get the job id from the output of sbatch
     REGEX="Submitted batch job ([[:digit:]]*)"
@@ -446,8 +458,6 @@ test_ring() {
              Error -> io:format('check_ring_deep: ~p~n', [Error]), halt(1)
          end."
     res=$((res+=$?))
-
-
     if  [[ $res -eq 0 ]]; then
         log info "testing ring was successful"
     else
@@ -502,17 +512,17 @@ write_config() {
 {mode, $MODE}.
 {duration, $DURATION}.
 {concurrent, $WORKERS_PER_LG}.
-{operations, $OPERATIONS}.
-%{operations,[
-%        {1, [{put, 1}, {get, 0}]},
-%        {1, [{put, 0}, {get, 1}]}
-%    ]}.
+%{operations, $OPERATIONS}.
+{operations,[
+    {1, [{put, 1}, {get, 0}]},
+    {1, [{put, 0}, {get, 1}]}
+]}.
 
 {driver, $BASHO_BENCH_DRIVER}.
 {key_generator, {int_to_str, {function, basho_bench_fixed_keygen, fixed, [12345]}}}.
 
 %% size in Bytes
-{value_generator, {fixed_bin, 1}}.
+{value_generator, {fixed_bin, $VALUE_SIZE}}.
 {scalarisclient_mynode, ['benchclient${PARALLEL_ID}']}.
 {scalarisclient_cookie, 'chocolate chip cookie'}.
 

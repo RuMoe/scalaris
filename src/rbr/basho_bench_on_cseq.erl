@@ -23,8 +23,8 @@
 -define(TRACE(X,Y), ok).
 
 %% assumes that all writes are done for the same key
--define(FAST_WRITES, true).
--define(ROUND_KEY, fast_round).
+-define(FAST_WRITES, true). %% emulates leader
+
 -include("scalaris.hrl").
 -include("client_types.hrl").
 
@@ -36,12 +36,14 @@
 %% read filters
 -export([rf_val/1]).
 -export([rf_int/1]).
+-export([rf_size_counter/1]).
 
 %% content checks
 -export([cc_noop/3]).
 
 %% write filters
 -export([wf_add/3]).
+-export([wf_add_size_counter/3]).
 
 
 %% %%%%%%%%%%%%%%%%%%%%%%
@@ -108,7 +110,7 @@ write(Key, Val) ->
     end.
 
 -spec fast_write(client_key(), client_value()) -> {ok}.
-fast_write(Key, _Val) ->
+fast_write(Key, Val) ->
     RequestSequenzer =
         fun() ->
             StartRound = receive {init_round, R} -> R end,
@@ -149,12 +151,15 @@ fast_write(Key, _Val) ->
                 receive {next_round, NewRound} -> NewRound end
         end,
 
-
+    {RF, CC, WF} =
+        case Val == <<>> of
+            true -> get_write_op_addition();
+            false -> get_write_op_size_counter_addition()
+        end,
     case pr:get_r(RoundToUse) of
         1 ->
-            {RF, CC, WF} = get_write_op_addition(),
             rbrcseq:qwrite_fast(kv_db, self(), ?RT:hash_key(Key), ?MODULE,
-                   RF, CC, WF, 1, RoundToUse, 0),
+                   RF, CC, WF, Val, RoundToUse, 0),
             receive
                 ?SCALARIS_RECV({qwrite_done, _ReqId, NextFastWriteRound, _Value, _WriteRet}, {ok}); %%;
                 ?SCALARIS_RECV({qwrite_deny, _ReqId, NextFastWriteRound, _Value, Reason},
@@ -163,9 +168,8 @@ fast_write(Key, _Val) ->
             end,
             request_handler ! {init_round, NextFastWriteRound};
         _ ->
-            {RF, CC, WF} = get_write_op_addition(),
             rbrcseq:qwrite_fast(kv_db, self(), ?RT:hash_key(Key), ?MODULE,
-                RF, CC, WF, 1, RoundToUse, 0),
+                RF, CC, WF, Val, RoundToUse, 0),
             request_handler ! {do_next},
             receive
                 ?SCALARIS_RECV({qwrite_done, _ReqId, _NextFastRound, _Value, _WriteRet}, ok); %%;
@@ -205,6 +209,11 @@ get_read_op_full_value() -> fun ?MODULE:rf_val/1.
 get_write_op_addition() ->
     {fun ?MODULE:rf_int/1, fun ?MODULE:cc_noop/3, fun ?MODULE:wf_add/3}.
 
+%% @doc Counter addition with payload for cmd size benchmarks.
+-spec get_write_op_size_counter_addition() -> {prbr:write_filter(), any(), prbr:read_filter()}.
+get_write_op_size_counter_addition() ->
+    {fun ?MODULE:rf_size_counter/1, fun ?MODULE:cc_noop/3, fun ?MODULE:wf_add_size_counter/3}.
+
 %% ------------------------- FILTER -------------------------
 
 %% @doc Readfilter returning the complete value or no_value_yet if key does not exist.
@@ -218,12 +227,20 @@ rf_val(X)           -> X.
 rf_int(prbr_bottom) -> 0;
 rf_int(X) when is_integer(X) -> X.
 
+-spec rf_size_counter(integer() | prbr_bottom) -> {integer(), binary()}.
+rf_size_counter(prbr_bottom) -> {0, <<>>};
+rf_size_counter(Counter={X,_Y}) when is_integer(X) -> Counter.
+
 %% @doc Does nothing.
 -spec cc_noop(any(), any(), any()) -> {true, none}.
 cc_noop(_ReadVal, _WriteFilter, _Val) -> {true, none}.
 
 %% @doc Writefilter that adds a value to an integer. Returns no value to client.
 -spec wf_add(integer() | prbr_bottom, any(), integer()) -> {integer(), none}.
-wf_add(prbr_bottom, _UI, ToAdd) -> {ToAdd, none};
-wf_add(Val, _UI, ToAdd) -> {Val + ToAdd, none}.
+wf_add(prbr_bottom, _UI, _ToAdd) -> {1, none};
+wf_add(Val, _UI, _ToAdd) -> {Val + 1, none}.
+
+-spec wf_add_size_counter(integer() | prbr_bottom, any(), integer()) -> {integer(), none}.
+wf_add_size_counter(prbr_bottom, _UI, Payload) -> {{1, Payload}, none};
+wf_add_size_counter({Val, _OldPayload}, _UI, Payload) -> {{Val + 1, Payload}, none}.
 
