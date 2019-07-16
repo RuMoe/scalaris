@@ -152,15 +152,7 @@ noop_write_filter(_, UI, X) -> {X, UI}.
 
 %% initialize: return initial state.
 -spec init(atom() | tuple()) -> state().
-init(DBName) ->
-    Table = ?PDB:new(DBName),
-    ?PDB:set(Table, {timestamp_started_key, mintime()}),
-    Table.
-
-mintime() -> erlang:system_time() / 1.0e9 / 60.
-reply(Key, TableName) ->
-    {_, InitTime} = ?PDB:get(TableName, timestamp_started_key),
-    hd(integer_to_list(Key)) > hd(integer_to_list(trunc(mintime() - InitTime) div 2)).
+init(DBName) -> ?PDB:new(DBName).
 
 %% @doc Closes the given DB (it may be recoverable using open/1 depending on
 %%      the DB back-end).
@@ -174,9 +166,6 @@ close_and_delete(State) -> ?PDB:close_and_delete(State).
 
 -spec on(message(), state()) -> state().
 on({prbr, round_request, _DB, Cons, Proposer, Key, DataType, ProposerUID, ReadFilter, OpType}, TableName) ->
-    case not reply(Key, TableName) of
-        true -> TableName;
-        _ ->
     ?TRACE("prbr:round_request: ~p in round ~p~n", [Key, ProposerUID]),
     KeyEntry = get_entry(Key, TableName),
 
@@ -225,14 +214,10 @@ on({prbr, round_request, _DB, Cons, Proposer, Key, DataType, ProposerUID, ReadFi
             set_entry(NewKeyEntry2, TableName)
     end,
 
-    TableName
-    end;
+    TableName;
 
 on({prbr, read, _DB, Cons, Proposer, Key, DataType, ProposerUID, ReadFilter,
-   ReadRound},  TableName) ->
-    case not reply(Key, TableName) of
-        true -> TableName;
-        _ ->
+   ReadRound}, TableName) ->
     ?TRACE("prbr:read: ~p in round ~p~n", [Key, ReadRound]),
     KeyEntry = get_entry(Key, TableName),
 
@@ -264,14 +249,10 @@ on({prbr, read, _DB, Cons, Proposer, Key, DataType, ProposerUID, ReadFilter,
          _ ->
             msg_read_deny(Proposer, Cons, ReadRound, entry_r_read(KeyEntry))
     end,
-    TableName
-    end;
+    TableName;
 
 on({prbr, write, DB, Cons, Proposer, Key, DataType, ProposerUID, InRound, OldWriteRound, Value,
     PassedToUpdate, WriteFilter, IsWriteThrough}, TableName) ->
-    case not reply(Key, TableName) of
-        true -> TableName;
-        _ ->
     ?TRACE("prbr:write for key: ~p in round ~p~n", [Key, InRound]),
     trace_mpath:log_info(self(), {prbr_on_write}),
     KeyEntry = get_entry(Key, TableName),
@@ -335,7 +316,6 @@ on({prbr, write, DB, Cons, Proposer, Key, DataType, ProposerUID, InRound, OldWri
 
                 set_entry(entry_set_val(NewEntry, NewVal), TableName);
             {false, Reason} ->
-                io:format("WRITABLE IS FALSE~n"),
                 RoundTried = pr:new(pr:get_r(InRound), ProposerUID),
                 trace_mpath:log_info(self(), {'prbr:on(write) denied',
                                               round, RoundTried}),
@@ -361,8 +341,7 @@ on({prbr, write, DB, Cons, Proposer, Key, DataType, ProposerUID, InRound, OldWri
                 %% write through attempts based on its partially completed write.
                 msg_write_deny(Proposer, Cons, Key, RoundTried)
         end,
-    TableName
-    end;
+    TableName;
 
 on({prbr, init_repair_on_write, DB, Key, KnownWriteRound}, TableName) ->
     %% Triggers a repair process for this replica.
@@ -500,7 +479,6 @@ next_read_round(Entry, ProposerUID) ->
 writable(Entry, InRound, OldWriteRound, WF) ->
     LatestSeenRead = entry_r_read(Entry),
     LatestSeenWrite = entry_r_write(Entry),
-    %io:format("~n~p~n~p~n~p~n~p~n~n", [LatestSeenRead, LatestSeenWrite, InRound, OldWriteRound]),
     InRoundR = pr:get_r(InRound),
     InRoundId = pr:get_id(InRound),
     LatestSeenReadR = pr:get_r(LatestSeenRead),
