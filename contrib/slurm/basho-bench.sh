@@ -512,14 +512,9 @@ write_config() {
 {mode, $MODE}.
 {duration, $DURATION}.
 {concurrent, $WORKERS_PER_LG}.
-%{operations, $OPERATIONS}.
-{operations,[
-    {1, [{put, 1}, {get, 0}]},
-    {1, [{put, 0}, {get, 1}]}
-]}.
-
+{operations, $OPERATIONS}.
 {driver, $BASHO_BENCH_DRIVER}.
-{key_generator, {int_to_str, {function, basho_bench_fixed_keygen, fixed, [12345]}}}.
+{key_generator, $KEY_GENERATOR}.
 
 %% size in Bytes
 {value_generator, {fixed_bin, $VALUE_SIZE}}.
