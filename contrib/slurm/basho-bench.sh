@@ -68,6 +68,7 @@ trap 'trap_cleanup' SIGTERM SIGINT
 #=============================
 
 main() {
+    set_node_prefix
     is_lg_external
     if ! $EXTERNAL_LG ; then
         LG_HOSTS=`scontrol show hostnames`
@@ -116,7 +117,7 @@ main_value() {
 
             OPERATIONS=$OPS
             nodeend=$((NODES-1))
-            NODELIST="cumu01-[02-$nodeend]"
+            NODELIST="${NODE_PREFIX}[02-$nodeend]"
 
             local value=$(printf "%06i" $VALUE_SIZE)
             PREFIX="value$value-$var"
@@ -165,7 +166,7 @@ main_load(){
 
             OPERATIONS=$OPS
             nodeend=$((NODES-1))
-            NODELIST="cumu01-[02-$nodeend]"
+            NODELIST="${NODE_PREFIX}[02-$nodeend]"
             log info "NODELIST=$NODELIST"
 
             WORKERS=$(printf "%04i" $WORKERS)
@@ -682,4 +683,8 @@ rm_lockfile() {
     rm -f $lockfile
 }
 
+set_node_prefix() {
+    local tmp="${SLURM_JOB_PARTITION}1" # default to 1
+    export NODE_PREFIX="cumu0${tmp:4:1}-"
+}
 main

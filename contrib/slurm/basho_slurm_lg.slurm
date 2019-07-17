@@ -23,7 +23,7 @@ export NODES=5 # number of scalaris nodes
 export VMS_PER_NODE=1
 
 #export OPERATIONS_SERIES="[{put,0},{get,1}] [{put,1},{get,19}] [{put,1},{get,9}]"
-export OPERATIONS_SERIES="[[{1,[{put,1},{get,0}]},{1,[{put,0},{get,1}]}]]" # single writer
+export OPERATIONS_SERIES="[{1,[{put,1},{get,0}]},{1,[{put,0},{get,1}]}]" # single writer
 
 # basho bench generation of keys. Change this for single key or multi-key workloads
 export KEY_GENERATOR="{int_to_str, {function, basho_bench_fixed_keygen, fixed, [12345]}}"
@@ -35,8 +35,8 @@ export KEY_GENERATOR="{int_to_str, {function, basho_bench_fixed_keygen, fixed, [
 export BASHO_BENCH_DRIVER="basho_bench_driver_scalaris"
 
 # locations for data collections - must be empty for bench to succeed
-export WD="$CUMUSCRATCH/$USER/rbr_single_writer_r$NODES_x5"
-export RESULT_DIR="/local/$USER/rbr_single_writer_r$NODES_x5"
+export WD="$CUMUSCRATCH/$USER/rbr_single_writer_r$NODES"
+export RESULT_DIR="/local/$USER/rbr_single_writer_r$NODES"
 
 # location of scalaris configuration file - used to set replication factor
 SCALARIS_CONF_FILE="$HOME/scalaris/bin/scalaris.cfg"
