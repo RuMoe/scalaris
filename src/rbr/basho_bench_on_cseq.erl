@@ -25,6 +25,10 @@
 %% assumes that all writes are done for the same key
 -define(FAST_WRITES, true). %% emulates leader
 
+% for hanging writer latency benchmark
+-define(HANGING_WRITER_PROP, 50000). %% propability that writer is hanging (~ every 60k requests)
+-define(HANGING_WRITER_DURATION, trunc(60*1.7)). %% how long it is hanging in seconds
+
 -include("scalaris.hrl").
 -include("client_types.hrl").
 
@@ -77,6 +81,17 @@ read(Key) ->
 
 -spec write(client_key(), client_value()) -> {ok}.
 write(Key, Val) ->
+  write(Key, Val, ?HANGING_WRITER_PROP > 0).
+
+write(Key, Val, _MaybeHanging=true) ->
+  case rand:uniform(?HANGING_WRITER_PROP) =:= 1 of
+    true ->
+      timer:sleep(1000 * ?HANGING_WRITER_DURATION),
+      ok;
+    false -> ok
+  end,
+  write(Key, Val, false);
+write(Key, Val, _MaybeHanging=false) ->
     case ?FAST_WRITES of
         true ->
             fast_write(Key, Val);

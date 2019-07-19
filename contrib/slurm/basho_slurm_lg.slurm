@@ -22,7 +22,7 @@ export TIMEOUT=60 # timeout when scalaris jobs in killed in minutes
 export NODES=5 # number of scalaris nodes
 export VMS_PER_NODE=1
 
-#export OPERATIONS_SERIES="[{put,0},{get,1}] [{put,1},{get,19}] [{put,1},{get,9}]"
+#export OPERATIONS_SERIES="[{put,1},{get,19}] [{put,1},{get,1}]"
 export OPERATIONS_SERIES="[{1,[{put,1},{get,0}]},{1,[{put,0},{get,1}]}]" # single writer
 
 # basho bench generation of keys. Change this for single key or multi-key workloads
@@ -47,14 +47,14 @@ SCALARIS_CONF_FILE="$HOME/scalaris/bin/scalaris.cfg"
 # This is necessary, as queueing multiple benchmarks with different scalaris config is not possible
 # right now, as each iteration in each benchmark is using a fresh scalaris instance (including the config)
 SCALARIS_CONF_SERIES_PAR="read_attempts_without_progress"
-SCALARIS_CONF_SERIES="0 1 2 5 10"
+SCALARIS_CONF_SERIES="10"
 
 exec_bench(){
 	# set replication degree
 	sed -i "s/\s*{replication_factor\s*,\s*[[:digit:]]*\s*}./{replication_factor, $NODES}./g" $SCALARIS_CONF_FILE
 	# used for load series
 	if [[ $KIND == "load" ]]; then
-	    export WORKERS_PER_LG_SERIES="2 3 5 9 17 33 65 129 257 513 1025"
+	    export WORKERS_PER_LG_SERIES="64"
 	    export VALUE_SIZE="0"
 	elif [[ $KIND == "value" ]]; then
 	    export WORKERS_PER_LG="256"
@@ -68,8 +68,8 @@ if [ -z ${SCALARIS_CONF_SERIES_PAR+x} ]; then
 else 
 	for VAL in $SCALARIS_CONF_SERIES; do
 		sed -i "s/\s*{$SCALARIS_CONF_SERIES_PAR\s*,\s*[[:digit:]]*\s*}./{$SCALARIS_CONF_SERIES_PAR, $VAL}./g" $SCALARIS_CONF_FILE
-		export WD="$CUMUSCRATCH/$USER/rbr_single_writer_r${NODES}_x${VAL}"
-		export RESULT_DIR="/local/$USER/rbr_single_writer_r${NODES}_x${VAL}"
+		export WD="$CUMUSCRATCH/$USER/rbr_hanging_writer_r${NODES}_x${VAL}"
+		export RESULT_DIR="/local/$USER/rbr_hanging_writer_r${NODES}_x${VAL}"
     	exec_bench
     done
 fi
