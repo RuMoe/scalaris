@@ -23,13 +23,16 @@
 -define(TRACE(X,Y), ok).
 
 -define(CACHED_ROUTING, (config:read(cache_dht_nodes))).
--define(LOG_ROUND_TRIPS, (config:read(log_round_trips))).
+
+-define(LOG_ROUND_TRIPS, (config:read(crdt_log_round_trips))).
+-define(LOG_ROUND_TRIPS_INTERVAL, (config:read(crdt_log_round_trips_interval))).
+-define(LOG_ETS_TABLE, round_trip_log).
+-define(LOG_RT_CUTOFF, 20).
 
 -define(READ_BATCHING_INTERVAL, (config:read(read_batching_interval))).
 -define(READ_BATCHING_INTERVAL_DIVERGENCE, 2).
 -define(WRITE_BATCHING_INTERVAL, (config:read(write_batching_interval))).
 -define(WRITE_BATCHING_INTERVAL_DIVERGENCE, 2).
-
 
 -include("scalaris.hrl").
 
@@ -87,6 +90,15 @@ start_link(DHTNodeGroup, Name, DBSelector) ->
 
 -spec init(dht_node_state:db_selector()) -> state().
 init(DBSelector) ->
+    case ?LOG_ROUND_TRIPS of
+        true ->
+            _ = ets:new(?LOG_ETS_TABLE, [named_table, set, public]),
+            InitHistogram = list_to_tuple(lists:duplicate(?LOG_RT_CUTOFF, 0)),
+            _ = ets:insert(?LOG_ETS_TABLE, {?LOG_ETS_TABLE, InitHistogram}),
+            msg_delay:send_trigger(?LOG_ROUND_TRIPS_INTERVAL, {next_log_period, 1});
+        false ->
+            ok
+    end,
     {?PDB:new(?MODULE, [set]), DBSelector, 0, false, false}.
 
 
@@ -496,7 +508,16 @@ on({local_range_req, Key, Message, {get_state_response, LocalRange}}, State) ->
     Dest = pid_groups:find_a(routing_table),
     LookupEnvelope = dht_node_lookup:envelope(3, setelement(6, Message, K)),
     comm:send_local(Dest, {?lookup_aux, K, 0, LookupEnvelope}),
+    State;
+
+% logging
+on({next_log_period, Period}, State) ->
+    [{?LOG_ETS_TABLE, Histogram}]  = ets:lookup(?LOG_ETS_TABLE, ?LOG_ETS_TABLE),
+    log:log(error, "rt_histogram [period ~p] --- ~p", [Period, Histogram]),
+
+    msg_delay:send_trigger(?LOG_ROUND_TRIPS_INTERVAL, {next_log_period, Period + 1}),
     State.
+
 
 %%%%%% internal helper
 
@@ -553,7 +574,7 @@ inform_client(write_done, Entry) ->
 -spec inform_client(read_done, entry(), any()) -> ok.
 inform_client(read_done, Entry, QueryResult) ->
     Client = entry_client(Entry),
-    log_round_trips(Entry, read),
+    add_round_trips_to_log(Entry),
     case is_tuple(Client) of
         true ->
             % must unpack envelope
@@ -562,12 +583,15 @@ inform_client(read_done, Entry, QueryResult) ->
             comm:send_local(entry_client(Entry), {read_done, QueryResult})
     end.
 
--spec log_round_trips(entry(), write | read) -> ok.
-log_round_trips(Entry, OpType) ->
+-spec add_round_trips_to_log(entry()) -> ok.
+add_round_trips_to_log(Entry) ->
     case ?LOG_ROUND_TRIPS of
         true ->
-            RoundTrips = entry_round_trips(Entry),
-            log:log(error, "rt,~p,~p", [OpType, RoundTrips]);
+            RoundTrips = min(entry_round_trips(Entry), ?LOG_RT_CUTOFF),
+            [{?LOG_ETS_TABLE, Histogram}] = ets:lookup(?LOG_ETS_TABLE, ?LOG_ETS_TABLE),
+            OldCount = element(RoundTrips, Histogram),
+            NewHistogram = setelement(RoundTrips, Histogram, OldCount + 1),
+            _ = ets:insert(?LOG_ETS_TABLE, {?LOG_ETS_TABLE, NewHistogram});
         false ->
             ok
     end.
@@ -741,4 +765,6 @@ next_write_batching_interval() ->
 check_config() ->
     config:cfg_is_integer(read_batching_interval) andalso
     config:cfg_is_integer(write_batching_interval) andalso
+    config:cfg_is_bool(crdt_log_round_trips) andalso
+    config:cfg_is_integer(crdt_log_round_trips_interval) andalso
     config:cfg_is_bool(cache_dht_nodes).
