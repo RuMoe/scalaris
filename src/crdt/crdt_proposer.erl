@@ -30,9 +30,11 @@
 -define(LOG_RT_CUTOFF, 20).
 
 -define(READ_BATCHING_INTERVAL, (config:read(read_batching_interval))).
--define(READ_BATCHING_INTERVAL_DIVERGENCE, 2).
+-define(READ_BATCHING_INTERVAL_DIVERGENCE, 0).
 -define(WRITE_BATCHING_INTERVAL, (config:read(write_batching_interval))).
--define(WRITE_BATCHING_INTERVAL_DIVERGENCE, 2).
+-define(WRITE_BATCHING_INTERVAL_DIVERGENCE, 0).
+
+-define(EXPONENTIAL_BACKOFF, true).
 
 -include("scalaris.hrl").
 
@@ -366,7 +368,14 @@ on({read, strong, {read_deny, ReqId, RetryMode, TriedRound, RequiredRound}}, Sta
                 %% retry the read in a higher round...
                 %% TODO more intelligent retry mechanism?
                 RoundTrips = entry_round_trips(Entry),
-                Delay = randoms:rand_uniform(0, 10),
+
+                Delay =
+                    case ?EXPONENTIAL_BACKOFF of
+                        true ->
+                            randoms:rand_uniform(0, trunc(math:pow(2, RoundTrips)));
+                        false ->
+                            randoms:rand_uniform(0, 10)
+                    end,
                 comm:send_local_after(Delay, self(),
                                         {req_start, {read, strong,
                                         entry_client(Entry),
@@ -745,10 +754,10 @@ set_write_batch_done(State) ->
     setelement(5, State, false).
 
 -spec read_batching_enabled() -> boolean().
-read_batching_enabled() -> ?READ_BATCHING_INTERVAL > 0.
+read_batching_enabled() -> ?READ_BATCHING_INTERVAL >= 0.
 
 -spec write_batching_enabled() -> boolean().
-write_batching_enabled() -> ?WRITE_BATCHING_INTERVAL > 0.
+write_batching_enabled() -> ?WRITE_BATCHING_INTERVAL >= 0.
 
 -spec next_read_batching_interval() -> non_neg_integer().
 next_read_batching_interval() ->

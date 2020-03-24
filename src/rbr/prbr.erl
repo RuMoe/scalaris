@@ -152,7 +152,19 @@ noop_write_filter(_, UI, X) -> {X, UI}.
 
 %% initialize: return initial state.
 -spec init(atom() | tuple()) -> state().
-init(DBName) -> ?PDB:new(DBName).
+%init(DBName = {tx_id, N}) ->
+ % _ = ets:new(crash_timestamp, [named_table]),
+ % ets:insert(crash_timestamp, {id, N}),
+ % ?PDB:new(DBName);
+
+init(DBName) ->
+  case ets:info(crash_timestamp) of
+    undefined ->
+      _ = ets:new(crash_timestamp, [named_table]);
+    _ -> ok
+  end,
+
+  ?PDB:new(DBName).
 
 %% @doc Closes the given DB (it may be recoverable using open/1 depending on
 %%      the DB back-end).
@@ -164,8 +176,7 @@ close(State) -> ?PDB:close(State).
 -spec close_and_delete(state()) -> true.
 close_and_delete(State) -> ?PDB:close_and_delete(State).
 
--spec on(message(), state()) -> state().
-on({prbr, round_request, _DB, Cons, Proposer, Key, DataType, ProposerUID, ReadFilter, OpType}, TableName) ->
+on(helper, {prbr, round_request, _DB, Cons, Proposer, Key, DataType, ProposerUID, ReadFilter, OpType}, TableName) ->
     ?TRACE("prbr:round_request: ~p in round ~p~n", [Key, ProposerUID]),
     KeyEntry = get_entry(Key, TableName),
 
@@ -216,7 +227,7 @@ on({prbr, round_request, _DB, Cons, Proposer, Key, DataType, ProposerUID, ReadFi
 
     TableName;
 
-on({prbr, read, _DB, Cons, Proposer, Key, DataType, ProposerUID, ReadFilter,
+on(helper, {prbr, read, _DB, Cons, Proposer, Key, DataType, ProposerUID, ReadFilter,
    ReadRound}, TableName) ->
     ?TRACE("prbr:read: ~p in round ~p~n", [Key, ReadRound]),
     KeyEntry = get_entry(Key, TableName),
@@ -251,7 +262,7 @@ on({prbr, read, _DB, Cons, Proposer, Key, DataType, ProposerUID, ReadFilter,
     end,
     TableName;
 
-on({prbr, write, DB, Cons, Proposer, Key, DataType, ProposerUID, InRound, OldWriteRound, Value,
+on(helper, {prbr, write, DB, Cons, Proposer, Key, DataType, ProposerUID, InRound, OldWriteRound, Value,
     PassedToUpdate, WriteFilter, IsWriteThrough}, TableName) ->
     ?TRACE("prbr:write for key: ~p in round ~p~n", [Key, InRound]),
     trace_mpath:log_info(self(), {prbr_on_write}),
@@ -342,6 +353,59 @@ on({prbr, write, DB, Cons, Proposer, Key, DataType, ProposerUID, InRound, OldWri
                 msg_write_deny(Proposer, Cons, Key, RoundTried)
         end,
     TableName;
+
+on(_CrashDelay=0, Msg, TableName) ->
+  on(helper, Msg, TableName);
+
+on(CrashDelay, Msg, TableName) ->
+  %% Warning: Only works correctly if each replica manages a single key
+  CrashTime =
+    case ets:lookup(crash_timestamp, crashtime) of
+      [] ->
+        Key = element(6, Msg),
+        Keys = lists:sort(replication:get_keys(Key)),
+        GetIdx = fun(_F, Find, [Find| _T], Idx) -> Idx;
+                    (F, Find, [_ | T], Idx) -> F(F, Find, T, Idx+1)
+                  end,
+        Idx = GetIdx(GetIdx, Key, Keys, 1),
+
+        Crash = erlang:system_time(millisecond) + 1000 * Idx * CrashDelay,
+        _ = ets:insert(crash_timestamp, {crashtime, Crash}),
+        Crash;
+      [{crashtime, Time}] -> Time
+    end,
+
+  case CrashTime =< erlang:system_time(millisecond) of
+    true ->
+      %% simulate crash by ignoring all messages
+      TableName;
+    false ->
+      on(helper, Msg, TableName)
+  end.
+
+
+
+-spec on(message(), state()) -> state().
+%%on(Msg, TableName) when element(3, Msg) =:= kvv_db ->
+%%  case ets:lookup(crash_timestamp, crash_time) of
+%%    [] ->
+%%      Now = erlang:system_time(millisecond),
+%%      {id, N} = hd(ets:lookup(first_req_timestamp, start)),
+%%      CrashTime = Now + 1000 * N * config:read(crash_acceptor_delay),
+%%      ets:insert(crash_timestamp, {crash_time, CrashTime}),
+%%      TableName;
+%%    [{crash_time, Time}] ->
+%%      case config:read(crash_acceptor_delay) > 0 andalso Time >= erlang:system_time(millisecond) of
+%%        true ->
+%%          ct:pal("Ignore message ~p~n", [Msg]),
+%%          TableName;
+%%        false ->
+%%          on(Msg, TableName)
+%%      end
+%%  end.
+on(Msg, TableName) when element(3, Msg) =:= kv_db andalso
+        (element(2, Msg) =:= round_request orelse element(2, Msg) =:= read orelse element(2, Msg) =:= write) ->
+  on(config:read(crash_acceptor_delay), Msg, TableName);
 
 on({prbr, init_repair_on_write, DB, Key, KnownWriteRound}, TableName) ->
     %% Triggers a repair process for this replica.

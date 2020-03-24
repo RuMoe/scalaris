@@ -153,7 +153,7 @@ qread(CSeqPidName, Client, Key, DataType, ReadFilter) ->
     Pid = pid_groups:find_a(CSeqPidName),
 
     ReqMsg  = {qround_request, Client, '_', Key, DataType,
-                ReadFilter, read, _RetriggerAfter = 1},
+                ReadFilter, read, _RetriggerAfter = 100000},
     start_request(Pid, ReqMsg),
     %% the process will reply to the client directly
     ok.
@@ -241,7 +241,7 @@ qwrite(CSeqPidName, Client, Key, DataType, ReadFilter, ContentCheck,
 
     ReqMsg = {qwrite, Client, '_', Key,
                    DataType, {ReadFilter, ContentCheck, WriteFilter},
-                   Value, _RetriggerAfter = 20},
+                   Value, _RetriggerAfter = 10000000},
     start_request(Pid, ReqMsg),
     %% the process will reply to the client directly
     ok.

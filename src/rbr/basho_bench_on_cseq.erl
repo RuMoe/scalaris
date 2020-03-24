@@ -26,7 +26,7 @@
 -define(FAST_WRITES, true). %% emulates leader
 
 % for hanging writer latency benchmark
--define(HANGING_WRITER_PROP, 50000). %% propability that writer is hanging (~ every 60k requests)
+-define(HANGING_WRITER_PROP, 0).
 -define(HANGING_WRITER_DURATION, trunc(60*1.7)). %% how long it is hanging in seconds
 
 -include("scalaris.hrl").
@@ -106,8 +106,8 @@ write(Key, Val, _MaybeHanging=false) ->
                 ?SCALARIS_RECV({qwrite_deny, _ReqId, _NextFastWriteRound, _Value, Reason},
                                begin log:log("Write failed on key ~p: ~p~n", [Key, Reason]),
                                {ok} end) %% TODO: extend write_result type {fail, Reason} )
-            after 5000 ->
-                    log:log("~p write hangs at key ~p, ~p~n",
+            after 1000 ->
+                    log:log(info, "~p write hangs at key ~p, ~p~n",
                             [self(), Key, erlang:process_info(self(), messages)]),
                     receive
                         ?SCALARIS_RECV({qwrite_done, _ReqId, _NextFastWriteRound, _Value, _WriteRet},

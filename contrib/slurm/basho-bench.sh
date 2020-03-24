@@ -66,6 +66,8 @@ trap 'trap_cleanup' SIGTERM SIGINT
 # export ERL_SCHED_FLAGS="+S 8"
 
 #=============================
+SLEEP1=10
+SLEEP2=10
 
 main() {
     set_node_prefix
@@ -116,8 +118,8 @@ main_value() {
             log info "WORKERS_PER_LG=$WORKERS_PER_LG"
 
             OPERATIONS=$OPS
-            nodeend=$((NODES-1))
-            NODELIST="${NODE_PREFIX}[02-$nodeend]"
+            nodeend=$((NODES))
+            NODELIST="${NODE_PREFIX}[03-$nodeend]"
 
             local value=$(printf "%06i" $VALUE_SIZE)
             PREFIX="value$value-$var"
@@ -166,17 +168,35 @@ main_load(){
 
             OPERATIONS=$OPS
             nodeend=$((NODES-1))
-            NODELIST="${NODE_PREFIX}[02-$nodeend]"
+            get_free_nodes
             log info "NODELIST=$NODELIST"
 
             WORKERS=$(printf "%04i" $WORKERS)
             PREFIX="load$WORKERS-$var"
             log info "starting load benchmark with $WORKERS ($WORKERS_PER_LG*$LOAD_GENERATORS)"
-
             repeat_benchmark
             let "var++"
         done
     done
+}
+
+get_free_nodes() {
+    NODELIST=""
+    echo -n "$(tag info) Aquiring $NODES free nodes on partition $SLURM_JOB_PARTITION"
+    local timer=0
+    until [[ `echo $NODELIST | wc -w` -eq $NODES ]]; do
+        if [ $timer -gt 0 ]; then
+            sleep 1
+        fi
+        NODELIST=`sinfo -N -p $SLURM_JOB_PARTITION --state=idle -o %N | head -n $((NODES+1)) | tail -n +2`
+        ((timer++))
+        # display status every 5 seconds
+        if ((timer%5==0)); then
+            echo -ne "."
+        fi
+    done
+    NODELIST=`echo $NODELIST | awk -v OFS="," '$1=$1'`
+    echo ": ok (${timer}s)"
 }
 
 repeat_benchmark() {
@@ -204,7 +224,7 @@ repeat_benchmark() {
 
         test_ring
         run_bbench
-        test_ring
+        #test_ring
 
         stop_scalaris
         rm_lockfile

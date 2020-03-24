@@ -33,6 +33,28 @@
 -export([skip_write_through/1]).
 -export([notify_orig_learner_on_wt/0]).
 
+get_remove_count() ->
+    case ets:info(first_req_timestamp) =:= undefined of
+        true ->
+            _ = ets:new(first_req_timestamp, [named_table]),
+            ets:insert(first_req_timestamp, {start, erlang:system_time(millisecond)});
+        false -> ok
+    end,
+    Now = erlang:system_time(millisecond),
+    {_, First} = hd(ets:lookup(first_req_timestamp, start)),
+    (Now - First) div (1000 * config:read(crash_acceptor_delay)).
+
+
+trim(List) ->
+    Delay = config:read(crash_acceptor_delay),
+    case Delay =:= 0 of
+        true ->
+            List;
+        false ->
+            RemoveCount = get_remove_count(),
+            lists:sublist(lists:sort(List), length(List) - RemoveCount)
+    end.
+
 %% @doc Returns the replicas of the given key.
 -spec get_keys(?RT:key()) -> [?RT:key()].
 get_keys(Key) ->
